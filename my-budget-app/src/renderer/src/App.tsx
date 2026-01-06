@@ -40,8 +40,9 @@ declare global {
       getAllProjects: () => Promise<any[]>
       getMemorySources: () => Promise<MemorySource[]>
       importToEditor: () => Promise<any>
-      // 👇 NUEVO MÉTODO PARA IA
-      importSmartBudget: () => Promise<{ success: boolean; data?: any[]; message?: string }> 
+      importSmartBudget: () => Promise<{ success: boolean; data?: any[]; message?: string }>
+      // 👇 ESTA ES LA LÍNEA NUEVA QUE FALTA
+      getMemoryItems: (sourceId: string) => Promise<any[]> 
     }
   }
 }
@@ -194,12 +195,13 @@ const HomeScreen = ({ onNavigate, projects, onSelectProject }: any) => (
   </div>
 );
 
-// --- PANTALLA GESTOR DE MEMORIA (CORREGIDA - CLICS BLINDADOS) ---
-const MemoryManagerScreen = ({ onBack, appProjects = [], onDeleteProject, onUpdateProject }: any) => {
+// --- PANTALLA GESTOR DE MEMORIA (ACTUALIZADA: LÁPIZ = EDITAR) ---
+// Simplemente borramos 'onUpdateProject' de la lista
+const MemoryManagerScreen = ({ onBack, appProjects = [], onDeleteProject, onOpenEditor }: any) => {
   const [importedSources, setImportedSources] = useState<MemorySource[]>([]);
-
   const [filterType, setFilterType] = useState<'all' | 'excel' | 'app'>('all');
   const [searchText, setSearchText] = useState('');
+  const [isAiLoading, setIsAiLoading] = useState(false);
 
   const normalizeSource = (s: Partial<MemorySource>): MemorySource => ({
     id: s.id || generateId(),
@@ -215,54 +217,28 @@ const MemoryManagerScreen = ({ onBack, appProjects = [], onDeleteProject, onUpda
     try {
       const result = await window.budgetAPI.getMemorySources();
       setImportedSources(Array.isArray(result) ? result.map(r => normalizeSource(r)) : []);
-    } catch (error) {
-      console.error('No se pudieron cargar las importaciones de memoria', error);
-    }
+    } catch (error) { console.error(error); }
   }, []);
 
   useEffect(() => { loadImportedSources(); }, [loadImportedSources]);
 
-  // 1. Unificar fuentes
   const appSources: MemorySource[] = appProjects.map((p: any) => ({
-      id: p.id,
-      name: p.name || 'Sin nombre',
-      type: 'app',
-      date: new Date().toLocaleDateString(),
-      tags: [p.donor, p.sector].filter(Boolean),
-      count: JSON.parse(p.data_json || '{}').lines?.length || 0,
-      originalData: p
+      id: p.id, name: p.name || 'Sin nombre', type: 'app', date: new Date().toLocaleDateString(),
+      tags: [p.donor, p.sector].filter(Boolean), count: JSON.parse(p.data_json || '{}').lines?.length || 0, originalData: p
   }));
-
   const allSources = [...importedSources, ...appSources];
-
-  // 2. Filtrado Robusto
   const filteredSources = allSources.filter(s => {
-      // Filtro por tipo (Pestañas)
       const matchesType = filterType === 'all' ? true : s.type === filterType;
-      
-      // Filtro por texto (Buscador)
       const term = searchText.toLowerCase();
-      const matchesText = s.name.toLowerCase().includes(term) || s.tags.some(t => t.toLowerCase().includes(term));
-      
-      return matchesType && matchesText;
+      return matchesType && (s.name.toLowerCase().includes(term) || s.tags.some(t => t.toLowerCase().includes(term)));
   });
 
-  // --- MANEJADORES DE ACCIÓN (CON STOP PROPAGATION) ---
-  
   const handleImport = async (e: React.MouseEvent) => {
-      e.stopPropagation(); // Evita burbujeo
+      e.stopPropagation(); setIsAiLoading(true);
       try {
-        const result = await window.budgetAPI.importExcel();
-        if (result && result.success) {
-            if (result.source) {
-                const normalized = normalizeSource(result.source);
-                setImportedSources(prev => [normalized, ...prev.filter(s => s.id !== normalized.id)]);
-            } else {
-                await loadImportedSources();
-            }
-            alert(`✅ Archivo importado correctamente. ${result.message || ''}`);
-        }
-      } catch (err) { console.error(err); }
+        const result = await window.budgetAPI.importSmartBudget();
+        if (result && result.success) { await loadImportedSources(); alert(`✅ Importado correctamente.`); }
+      } catch (err) { alert("Error IA"); } finally { setIsAiLoading(false); }
   };
 
   const handleDownload = (e: React.MouseEvent, source: MemorySource) => {
@@ -270,146 +246,53 @@ const MemoryManagerScreen = ({ onBack, appProjects = [], onDeleteProject, onUpda
       if (source.type === 'app' && source.originalData) {
           try {
               const data = JSON.parse(source.originalData.data_json);
-              // Aseguramos que existan tasas para evitar error
               const metaWithRates = { ...data.meta, usdRate: data.meta?.usdRate || 3.75, eurRate: data.meta?.eurRate || 4.05 };
               generateBudgetExcel(metaWithRates, data.sections, data.lines);
-          } catch(err) { alert("Error al generar el Excel."); }
-      } else {
-          alert("ℹ️ Simulación: El archivo original se descargaría aquí.");
-      }
+          } catch(err) { alert("Error al generar Excel."); }
+      } else { alert("Descarga de importados no disponible en esta versión."); }
   };
 
   const handleDelete = (e: React.MouseEvent, id: string, type: string) => {
       e.stopPropagation();
-      // Usamos confirm nativo
-      if (window.confirm("¿Eliminar esta fuente permanentemente?")) {
-          if (type === 'app') {
-             onDeleteProject(id);
-          } else {
-             setImportedSources(prev => prev.filter(s => s.id !== id));
-          }
+      if (window.confirm("¿Eliminar fuente?")) {
+          if (type === 'app') onDeleteProject(id); else setImportedSources(prev => prev.filter(s => s.id !== id));
       }
-  };
-
-  const handleEditName = (e: React.MouseEvent, id: string, currentName: string, type: string) => {
-      e.stopPropagation();
-      const newName = window.prompt("Nuevo nombre:", currentName);
-      if (newName && newName.trim() !== "") {
-          if (type === 'app') {
-              onUpdateProject(id, { name: newName });
-          } else {
-              setImportedSources(prev => prev.map(s => s.id === id ? { ...s, name: newName } : s));
-          }
-      }
-  };
-
-  const handleAddTag = (e: React.MouseEvent, id: string, type: string) => {
-      e.stopPropagation();
-      const newTag = window.prompt("Nueva etiqueta:");
-      if (newTag) {
-          if (type === 'app') {
-             alert("💡 Nota: En proyectos App, edita el Donante o Sector en la configuración.");
-          } else {
-             setImportedSources(prev => prev.map(s => s.id === id ? { ...s, tags: [...s.tags, newTag] } : s));
-          }
-      }
-  };
-
-  const handleRemoveTag = (e: React.MouseEvent, id: string, type: string, tag: string) => {
-    e.stopPropagation();
-    if(type === 'excel') {
-        if(window.confirm(`¿Quitar etiqueta "${tag}"?`)) {
-            setImportedSources(prev => prev.map(s => s.id === id ? { ...s, tags: s.tags.filter(t => t !== tag) } : s));
-        }
-    }
   };
 
   return (
     <div style={styles.homeContainer}>
-      <div style={{...styles.dashboardCard, width: '1000px', height: '650px', flexDirection: 'column'}}>
-        {/* Header */}
+      <div style={{...styles.dashboardCard, width: '1000px', height: '650px', flexDirection: 'column', position: 'relative'}}>
         <div style={{padding: '20px 30px', borderBottom: '1px solid rgba(255,255,255,0.1)', display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
             <h2 style={{margin:0, color: '#4ec9b0', fontFamily: 'Aptos, sans-serif'}}>🧠 Gestión de Memoria</h2>
-            <button onClick={onBack} style={{...styles.closeBtn, padding: '5px 15px', fontSize: '12px', cursor: 'pointer'}}>← Volver</button>
+            <button onClick={onBack} style={{...styles.closeBtn, padding: '5px 15px', fontSize: '12px'}}>← Volver</button>
         </div>
-
-        {/* Toolbar */}
-        <div style={{padding: '20px 30px', display: 'flex', flexDirection: 'column', gap: 15, borderBottom: '1px solid rgba(255,255,255,0.05)'}}>
-            <div style={{display: 'flex', gap: 10}}>
-                <button className="menu-btn primary" onClick={handleImport} style={{width: 'auto', fontFamily: 'Aptos, sans-serif', fontSize: 13, cursor: 'pointer', position: 'relative', zIndex: 10}}>📥 Importar Excel Nuevo</button>
-                <input placeholder="🔍 Buscar fuente..." value={searchText} onChange={(e) => setSearchText(e.target.value)} style={{...styles.input, marginBottom: 0, width: '300px', background: 'rgba(0,0,0,0.2)'}} />
-            </div>
-            
-            {/* TABS (Filtros) */}
-            <div style={{display: 'flex', gap: 5}}>
-                {['all', 'excel', 'app'].map((t) => (
-                    <button key={t} onClick={() => setFilterType(t as any)}
-                        style={{
-                            background: filterType === t ? '#4ec9b0' : 'transparent', color: filterType === t ? '#000' : '#aaa',
-                            border: '1px solid #4ec9b0', borderRadius: '20px', padding: '4px 15px', fontSize: '12px', cursor: 'pointer',
-                            textTransform: 'capitalize', fontWeight: 'bold', fontFamily: 'Aptos, sans-serif',
-                            position: 'relative', zIndex: 10 // Z-Index para asegurar clic
-                        }}
-                    >
-                        {t === 'all' ? 'Todos' : t === 'excel' ? 'Importados' : 'Proyectos App'}
-                    </button>
-                ))}
-            </div>
+        <div style={{padding: '20px 30px', display: 'flex', gap: 15, borderBottom: '1px solid rgba(255,255,255,0.05)'}}>
+            <button className="menu-btn primary" onClick={handleImport} style={{width: 'auto', fontSize: 13}}>📥 Importar Excel Nuevo</button>
+            <input placeholder="🔍 Buscar..." value={searchText} onChange={(e) => setSearchText(e.target.value)} style={{...styles.input, marginBottom: 0, width: '300px', background: 'rgba(0,0,0,0.2)'}} />
+            {['all', 'excel', 'app'].map(t => <button key={t} onClick={() => setFilterType(t as any)} style={{background: filterType === t ? '#4ec9b0' : 'transparent', color: filterType === t ? '#000' : '#aaa', border: '1px solid #4ec9b0', borderRadius: 20, padding: '4px 15px', fontSize: 12, textTransform: 'capitalize'}}>{t === 'all' ? 'Todos' : t === 'excel' ? 'Importados' : 'Apps'}</button>)}
         </div>
-
-        {/* Tabla */}
         <div style={{flex: 1, padding: '20px 30px', overflowY: 'auto'}}>
-            <table style={{width: '100%', borderCollapse: 'collapse', color: '#eee', fontSize: '13px', fontFamily: 'Aptos, sans-serif'}}>
-                <thead>
-                    <tr style={{borderBottom: '2px solid #4ec9b0', textAlign: 'left', color: '#4ec9b0'}}>
-                        <th style={{padding: 10}}>Nombre de Fuente</th>
-                        <th style={{padding: 10}}>Tipo</th>
-                        <th style={{padding: 10}}>Items</th>
-                        <th style={{padding: 10}}>Fecha</th>
-                        <th style={{padding: 10}}>Etiquetas</th>
-                        <th style={{padding: 10, textAlign: 'right'}}>Acciones</th>
-                    </tr>
-                </thead>
+            <table style={{width: '100%', borderCollapse: 'collapse', color: '#eee', fontSize: '13px'}}>
+                <thead><tr style={{borderBottom: '2px solid #4ec9b0', textAlign: 'left', color: '#4ec9b0'}}><th style={{padding:10}}>Nombre</th><th style={{padding:10}}>Tipo</th><th style={{padding:10}}>Items</th><th style={{padding:10}}>Fecha</th><th style={{padding:10}}>Acciones</th></tr></thead>
                 <tbody>
                     {filteredSources.map(s => (
                         <tr key={s.id} style={{borderBottom: '1px solid rgba(255,255,255,0.1)'}}>
-                            <td style={{padding: 10, fontWeight: 'bold'}}>
-                                <span style={{marginRight: 8}}>{s.type === 'excel' ? '📊' : '📱'}</span>{s.name}
-                            </td>
-                            <td style={{padding: 10}}>
-                                <span style={{background: s.type === 'excel' ? 'rgba(76, 175, 80, 0.2)' : 'rgba(33, 150, 243, 0.2)', color: s.type === 'excel' ? '#81c784' : '#64b5f6', padding: '2px 8px', borderRadius: 4, fontSize: 10, textTransform: 'uppercase', fontWeight: 'bold'}}>
-                                    {s.type === 'excel' ? 'Importado' : 'App'}
-                                </span>
-                            </td>
-                            <td style={{padding: 10, color: '#aaa'}}>{s.count > 0 ? s.count : '-'}</td>
+                            <td style={{padding: 10, fontWeight: 'bold'}}>{s.name}</td>
+                            <td style={{padding: 10}}><span style={{background: s.type === 'excel' ? 'rgba(76,175,80,0.2)' : 'rgba(33,150,243,0.2)', color: s.type === 'excel' ? '#81c784' : '#64b5f6', padding: '2px 8px', borderRadius: 4, fontSize: 10}}>{s.type.toUpperCase()}</span></td>
+                            <td style={{padding: 10, color: '#aaa'}}>{s.count}</td>
                             <td style={{padding: 10, color: '#aaa'}}>{s.date}</td>
-                            
-                            {/* Celdas de Etiquetas */}
-                            <td style={{padding: 10}}>
-                                {s.tags.filter(Boolean).map((t, idx) => (
-                                    <span key={idx} 
-                                        onClick={(e) => handleRemoveTag(e, s.id, s.type, t)} 
-                                        title="Clic para eliminar (solo importados)" 
-                                        style={{background: 'rgba(255,255,255,0.15)', color: '#eee', padding: '2px 8px', borderRadius: 10, fontSize: 10, marginRight: 5, border: '1px solid rgba(255,255,255,0.2)', cursor: 'pointer', display: 'inline-block'}}
-                                    >
-                                        {t}
-                                    </span>
-                                ))}
-                                <button onClick={(e) => handleAddTag(e, s.id, s.type)} style={{background: 'transparent', border: '1px dashed #666', color: '#666', borderRadius: '50%', width: 20, height: 20, fontSize: 12, cursor: 'pointer', position: 'relative', zIndex: 5}} title="Añadir etiqueta">+</button>
-                            </td>
-
-                            {/* Celdas de Acciones */}
                             <td style={{padding: 10, textAlign: 'right'}}>
-                                <button onClick={(e) => handleDownload(e, s)} style={{background: 'transparent', border: 'none', cursor: 'pointer', marginRight: 15, fontSize: 16, position: 'relative', zIndex: 5}} title="Descargar">⬇️</button>
-                                <button onClick={(e) => handleEditName(e, s.id, s.name, s.type)} style={{background: 'transparent', border: 'none', cursor: 'pointer', marginRight: 15, fontSize: 16, position: 'relative', zIndex: 5}} title="Editar nombre">✏️</button>
-                                <button onClick={(e) => handleDelete(e, s.id, s.type)} style={{background: 'transparent', border: 'none', cursor: 'pointer', fontSize: 16, position: 'relative', zIndex: 5}} title="Eliminar">🗑️</button>
+                                <button onClick={(e) => handleDownload(e, s)} style={{background: 'transparent', border: 'none', cursor: 'pointer', marginRight: 10, fontSize: 16}} title="Descargar">⬇️</button>
+                                {/* 👇 AQUÍ ESTÁ EL CAMBIO IMPORTANTE: EL LÁPIZ AHORA EDITA */}
+                                <button onClick={() => onOpenEditor(s)} style={{background: 'transparent', border: 'none', cursor: 'pointer', marginRight: 10, fontSize: 16}} title="Abrir en Editor">✏️</button>
+                                <button onClick={(e) => handleDelete(e, s.id, s.type)} style={{background: 'transparent', border: 'none', cursor: 'pointer', fontSize: 16}} title="Eliminar">🗑️</button>
                             </td>
                         </tr>
                     ))}
                 </tbody>
             </table>
-            {filteredSources.length === 0 && <div style={{textAlign: 'center', color: '#666', marginTop: 40}}><p>No se encontraron fuentes con los filtros actuales.</p></div>}
         </div>
+        {isAiLoading && <div style={{position: 'absolute', inset: 0, background: 'rgba(30,30,30,0.95)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', borderRadius: 15, zIndex: 999}}><div style={{fontSize: 50}}>🧠🐱</div><h3 style={{color:'#4ec9b0'}}>Leyendo...</h3></div>}
       </div>
     </div>
   )
@@ -818,7 +701,7 @@ const EditorScreen = ({ initialData, onBack }: { initialData: ProjectFile, onBac
   )
 }
 
-// --- APP (PRINCIPAL - LOGICA DE BORRADO AGREGADA) ---
+// --- APP PRINCIPAL ---
 export default function App() {
   const [screen, setScreen] = useState('home');
   const [projects, setProjects] = useState<any[]>([]);
@@ -832,28 +715,76 @@ export default function App() {
         const data = JSON.parse(p.data_json);
         setSelectedData({ meta: { donor:p.donor, country:p.country, currency:p.currency, sector:p.sector, duration:p.duration, usdRate: p.usd_rate || 3.75, eurRate: p.eur_rate || 4.05 }, ...data });
         setScreen('editor');
-    } catch(e) {
-        console.error("Error cargando proyecto", e);
+    } catch(e) { console.error(e); }
+  }
+
+  // 👇 NUEVA FUNCIÓN: CARGAR FUENTE (APP O MEMORIA) AL EDITOR
+  const handleLoadSourceToEditor = async (source: MemorySource) => {
+    if (source.type === 'app' && source.originalData) {
+      // Caso 1: Es un proyecto de la App
+      onSelect(source.originalData);
+    } else {
+      // Caso 2: Es una importación (Excel/IA)
+      try {
+        // Pedimos al backend los items guardados
+        const items = await window.budgetAPI.getMemoryItems(source.id);
+        
+        if (!items || items.length === 0) {
+          alert("Esta fuente no tiene items guardados o no se pudieron leer.");
+          return;
+        }
+
+        // Convertimos las filas de la BD a líneas del Editor
+        const newSectionId = generateId();
+        const convertedLines: BudgetLine[] = items.map((item: any) => ({
+          id: generateId(),
+          sectionId: newSectionId,
+          category: item.category || 'General',
+          description: item.description,
+          unit: item.unit || 'Und',
+          quantity: 1, 
+          frequency: 1,
+          unit_cost: item.unit_cost,
+          total: item.unit_cost,
+          selected: false,
+          showNotes: false
+        }));
+
+        const projectData: ProjectFile = {
+          meta: { donor: 'Importado', country: 'Perú', currency: 'PEN', sector: '', duration: 12, usdRate: 3.75, eurRate: 4.05 },
+          sections: [{ id: newSectionId, name: source.name, collapsed: false }],
+          lines: convertedLines
+        };
+
+        setSelectedData(projectData);
+        setScreen('editor');
+
+      } catch (error) {
+        console.error(error);
+        alert("Error al cargar la fuente en el editor.");
+      }
     }
-  }
+  };
 
-  // --- Funciones de Gestión para la Memoria ---
-  const deleteProject = (id: string) => {
-      setProjects(prev => prev.filter(p => p.id !== id));
-  }
-
-  const updateProject = (id: string, newData: any) => {
-      setProjects(prev => prev.map(p => p.id === id ? { ...p, ...newData } : p));
-  }
+  const deleteProject = (id: string) => setProjects(prev => prev.filter(p => p.id !== id));
+  const updateProject = (id: string, newData: any) => setProjects(prev => prev.map(p => p.id === id ? { ...p, ...newData } : p));
 
   return (
     <div style={{fontFamily: 'Aptos, sans-serif'}}>
-      {screen === 'home' && <HomeScreen onNavigate={setScreen} projects={projects} onSelectProject={onSelect} onImport={async () => { await window.budgetAPI.importExcel(); load(); }} />}
+      {screen === 'home' && <HomeScreen onNavigate={setScreen} projects={projects} onSelectProject={onSelect} />}
       {screen === 'create-project' && <CreateProjectScreen onBack={() => setScreen('home')} onStart={(m:any) => { setSelectedData({meta:m, sections:[{id: generateId(), name: 'Personal'}], lines:[]}); setScreen('editor'); }} onImportToEditor={async (m:any) => { const d = await window.budgetAPI.importToEditor(); if(d) { setSelectedData({meta:m, ...d}); setScreen('editor'); } }} />}
       {screen === 'editor' && selectedData && <EditorScreen initialData={selectedData} onBack={() => { load(); setScreen('home'); }} />}
       
-      {/* Pasamos las funciones de gestión a la pantalla de memoria */}
-      {screen === 'memory-manager' && <MemoryManagerScreen onBack={() => setScreen('home')} appProjects={projects} onDeleteProject={deleteProject} onUpdateProject={updateProject} />}
+      {screen === 'memory-manager' && (
+        <MemoryManagerScreen 
+          onBack={() => setScreen('home')} 
+          appProjects={projects} 
+          onDeleteProject={deleteProject} 
+          onUpdateProject={updateProject} 
+          // Pasamos la nueva función aquí 👇
+          onOpenEditor={handleLoadSourceToEditor} 
+        />
+      )}
     </div>
   )
 }

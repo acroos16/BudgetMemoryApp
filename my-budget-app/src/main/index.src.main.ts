@@ -4,6 +4,8 @@ import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import * as XLSX from 'xlsx'
 import Database from 'better-sqlite3'
+import { analyzeBudgetRows } from './aiService' 
+
 
 // ---------------------------------------------------------
 // 1. CONFIGURACIÓN BASE DE DATOS (SQLITE)
@@ -45,10 +47,9 @@ db.exec(`
 `)
 
 // ---------------------------------------------------------
-// 2. FUNCIONES AUXILIARES (INTELIGENCIA DE NEGOCIO)
+// 2. FUNCIONES AUXILIARES
 // ---------------------------------------------------------
 
-// A. Consulta Tasa de Cambio SUNAT (Se usa en importaciones)
 async function getSunatRate(): Promise<number> {
   try {
     const response = await fetch('https://api.apis.net.pe/v1/tipo-cambio-sunat');
@@ -56,11 +57,10 @@ async function getSunatRate(): Promise<number> {
     const data = await response.json();
     return parseFloat(data.venta);
   } catch (error) {
-    return 3.75; // Fallback seguro
+    return 3.75; 
   }
 }
 
-// B. Adivinador de Categorías (Tu lógica original)
 function guessCategory(text: string): string {
   const t = text.toLowerCase();
   if (t.includes('coordin') || t.includes('jefe') || t.includes('especialista') || t.includes('asistente') || t.includes('consult') || t.includes('personal') || t.includes('gerente') || t.includes('director')) return 'Personal';
@@ -102,7 +102,7 @@ function createWindow(): void {
 }
 
 // ---------------------------------------------------------
-// 4. HANDLERS IPC (EL CEREBRO DE LA APP)
+// 4. HANDLERS IPC
 // ---------------------------------------------------------
 app.whenReady().then(() => {
   electronApp.setAppUserModelId('com.budgetcat')
@@ -113,23 +113,18 @@ app.whenReady().then(() => {
 
   createWindow()
 
-  // --- HANDLER 1: GUARDAR PROYECTO (Frontend: saveProjectInternal) ---
+  // HANDLER: GUARDAR PROYECTO
   ipcMain.handle('save-project', async (_event, projectData) => {
     try {
       const { id, name, donor, data_json } = projectData
-      
       const transaction = db.transaction(() => {
-        // 1. Guardar el Proyecto en la tabla principal
         const stmtProject = db.prepare(`
           INSERT OR REPLACE INTO projects (id, name, donor, data_json, updated_at)
           VALUES (@id, @name, @donor, @data_json, datetime('now'))
         `)
         stmtProject.run({ id, name, donor, data_json })
 
-        // 2. Indexar Costos para la Memoria (Buscador)
-        // Primero limpiamos la memoria vieja de este proyecto
         db.prepare('DELETE FROM cost_memory WHERE source_project_id = ?').run(id)
-        
         const stmtMemory = db.prepare(`
           INSERT INTO cost_memory (description, category, unit, unit_cost, currency, year, sector, donor, source_project_id)
           VALUES (@description, @category, @unit, @unit_cost, @currency, @year, @sector, @donor, @source_project_id)
@@ -139,9 +134,8 @@ app.whenReady().then(() => {
         const lines = parsedData.lines || []
         const meta = parsedData.meta || {}
         
-        // Insertamos solo líneas válidas
         lines.forEach((line: any) => {
-          if (line.description && line.unit_cost > 0 && !line.parentId) { // Solo líneas padre o con costo directo
+          if (line.description && line.unit_cost > 0 && !line.parentId) {
             stmtMemory.run({
               description: line.description,
               category: line.category || 'General',
@@ -156,8 +150,7 @@ app.whenReady().then(() => {
           }
         })
       })
-
-      transaction() // Ejecutar todo junto
+      transaction()
       return { success: true, message: 'Guardado correctamente en SQL' }
     } catch (error: any) {
       console.error('Error SQL:', error)
@@ -165,7 +158,7 @@ app.whenReady().then(() => {
     }
   })
 
-  // --- HANDLER 2: OBTENER PROYECTOS (Frontend: getAllProjects) ---
+  // HANDLER: OBTENER PROYECTOS
   ipcMain.handle('get-projects', () => {
     try {
       return db.prepare('SELECT * FROM projects ORDER BY updated_at DESC').all()
@@ -175,15 +168,14 @@ app.whenReady().then(() => {
     }
   })
 
-  // --- HANDLER 3: BUSCAR COSTOS (Frontend: searchCost) ---
+  // HANDLER: BUSCAR COSTOS
   ipcMain.handle('search-cost', (_event, query) => {
     try {
       const stmt = db.prepare(`
         SELECT description, category, unit, unit_cost, currency, year, donor 
         FROM cost_memory 
         WHERE description LIKE ? OR category LIKE ? 
-        ORDER BY year DESC 
-        LIMIT 10
+        ORDER BY year DESC LIMIT 10
       `)
       return stmt.all(`%${query}%`, `%${query}%`)
     } catch (error) {
@@ -192,7 +184,7 @@ app.whenReady().then(() => {
     }
   })
 
-  // --- HANDLER 4: IMPORTAR EXCEL A EDITOR (Frontend: importToEditor) ---
+  // HANDLER: IMPORTAR A EDITOR (LEGACY + IA)
   ipcMain.handle('import-to-editor', async () => {
     const { canceled, filePaths } = await dialog.showOpenDialog({
       properties: ['openFile'],
@@ -203,7 +195,6 @@ app.whenReady().then(() => {
 
     try {
       const workbook = XLSX.readFile(filePaths[0]);
-      // Buscar hoja que parezca presupuesto
       const targetSheet = workbook.SheetNames.find(n => 
         n.toLowerCase().includes('presupuesto') || n.toLowerCase().includes('budget') || n.toLowerCase().includes('data')
       ) || workbook.SheetNames[0];
@@ -211,7 +202,6 @@ app.whenReady().then(() => {
       const sheet = workbook.Sheets[targetSheet];
       const rawData = XLSX.utils.sheet_to_json(sheet, { header: 1 }) as any[][];
 
-      // Detectar encabezados
       const descKeywords = ['descrip', 'activity', 'actividad', 'item', 'detalle'];
       const costKeywords = ['unitario', 'precio', 'monto', 'cost', 'unit cost'];
       const qtyKeywords = ['cant', 'freq', 'unidades', 'quantity'];
@@ -249,7 +239,7 @@ app.whenReady().then(() => {
           importedLines.push({
             id: `line-${Math.random().toString(36).substr(2, 9)}`,
             sectionId: defaultSecId,
-            category: guessCategory(description), // Usamos tu función inteligente
+            category: guessCategory(description),
             description: description,
             quantity: Number(row[idxQty]) || 1,
             frequency: 1,
@@ -264,7 +254,6 @@ app.whenReady().then(() => {
       return { 
         sections: Array.from(sectionsMap.values()), 
         lines: importedLines,
-        // Si quieres, intenta detectar la moneda aquí o devuélvela por defecto
         meta: { currency: 'PEN', usdRate: 3.75, eurRate: 4.05 } 
       };
 
@@ -274,7 +263,87 @@ app.whenReady().then(() => {
     }
   });
 
-  // --- HANDLER 5: IMPORTAR EXCEL SOLO A MEMORIA (Frontend: importExcel - MemoryManager) ---
+// ---------------------------------------------------------
+  // HANDLER: IMPORTAR INTELIGENTE (IA) 🧠 -> A MEMORIA
+  // ---------------------------------------------------------
+  ipcMain.handle('import-smart-budget', async () => {
+    // 1. Abrir selector de archivos
+    const { canceled, filePaths } = await dialog.showOpenDialog({
+      properties: ['openFile'],
+      filters: [{ name: 'Excel Files', extensions: ['xlsx', 'xls', 'csv'] }]
+    })
+
+    if (canceled || !filePaths[0]) return { success: false, message: 'Cancelado' }
+
+    try {
+      const fileName = basename(filePaths[0])
+      
+      // 2. Leer Excel
+      const workbook = XLSX.readFile(filePaths[0])
+      const sheet = workbook.Sheets[workbook.SheetNames[0]]
+      const rawData = XLSX.utils.sheet_to_json(sheet, { header: 1 })
+      
+      // Tomamos una muestra de 50 filas para no saturar a la IA
+      const cleanData = rawData.filter((r: any) => r.length > 0).slice(0, 50);
+
+      // 3. 🤖 Llamada a la IA (Tu servicio nuevo)
+      // Esperamos que analyzeBudgetRows devuelva un array de objetos:
+      // [{ description: "...", category: "...", unit: "...", unit_cost: 100, ... }]
+      const aiResult = await analyzeBudgetRows(cleanData); 
+
+      if (!aiResult || aiResult.length === 0) {
+        throw new Error("La IA no encontró items válidos.");
+      }
+
+      // 4. Guardar en Base de Datos (SQLite)
+      const importId = `ai-${Date.now()}` // ID único para esta importación
+      
+      const stmt = db.prepare(`
+        INSERT INTO cost_memory (description, category, unit, unit_cost, currency, year, donor, source_project_id)
+        VALUES (@description, @category, @unit, @unit_cost, 'PEN', @year, 'Importado IA', @source_project_id)
+      `)
+
+      const transaction = db.transaction(() => {
+        let inserted = 0
+        
+        aiResult.forEach((item: any) => {
+          // Validamos que tenga descripción y costo
+          if (item.description && (item.unit_cost > 0 || item.total > 0)) {
+            stmt.run({
+              description: item.description,
+              category: item.category || 'General', // La IA ya nos dio la categoría
+              unit: item.unit || 'Und',
+              unit_cost: item.unit_cost || item.total, // Usamos lo que haya encontrado
+              year: new Date().getFullYear(),
+              source_project_id: importId
+            })
+            inserted++
+          }
+        })
+
+        // Registramos la importación en la tabla resumen
+        db.prepare(`
+          INSERT OR REPLACE INTO memory_imports (id, name, rows_imported, imported_at, tags)
+          VALUES (@id, @name, @rows_imported, datetime('now'), @tags)
+        `).run({
+          id: importId,
+          name: `(IA) ${fileName}`, // Le ponemos (IA) al nombre para que lo distingas
+          rows_imported: inserted,
+          tags: JSON.stringify(['Excel', 'AI', 'Llama3'])
+        })
+      })
+
+      transaction() // Ejecuta la transacción
+
+      return { success: true, message: `IA procesó e importó correctamente.` }
+
+    } catch (error: any) {
+      console.error("Error en Importación IA:", error)
+      return { success: false, message: error.message }
+    }
+  })
+
+  // HANDLER: IMPORTAR A MEMORIA
   ipcMain.handle('import-excel', async () => {
     const { canceled, filePaths } = await dialog.showOpenDialog({
       properties: ['openFile'],
@@ -288,17 +357,15 @@ app.whenReady().then(() => {
       const sheet = workbook.Sheets[workbook.SheetNames[0]]
       const rawData = XLSX.utils.sheet_to_json(sheet, { header: 1 }) as any[][]
 
-      // 1. Detectar Tasa de Cambio (Usamos tu función getSunatRate aquí si falla la detección)
       let exchangeRate = 0;
       const rateRow = rawData.find(row => JSON.stringify(row).toLowerCase().includes('tipo de cambio'));
       if (rateRow) {
          exchangeRate = parseFloat(String(rateRow.find(c => typeof c === 'number') || 0));
       }
       if (!exchangeRate || exchangeRate === 0) {
-        exchangeRate = await getSunatRate(); // ¡Aquí usamos la función para que no salga el error de "unused"!
+        exchangeRate = await getSunatRate();
       }
 
-      // 2. Detectar Columnas
       const descKeywords = ['descrip', 'activity', 'actividad', 'detalle']
       const costKeywords = ['total', 'cost', 'monto', 'unitario']
       
@@ -312,7 +379,6 @@ app.whenReady().then(() => {
 
       if (headerRow === -1) return { success: false, message: 'No se encontraron encabezados válidos' }
 
-      // 3. Insertar masivamente en cost_memory
       const importId = `excel-${Date.now()}`
       const fileName = basename(filePaths[0])
       const headers = rawData[headerRow].map(h => String(h || '').toLowerCase())
@@ -338,7 +404,7 @@ app.whenReady().then(() => {
           if (desc.length > 2 && cost > 0) {
             stmt.run({
               description: desc,
-              category: guessCategory(desc), // Categorización automática
+              category: guessCategory(desc),
               unit: idxUnit > -1 ? String(row[idxUnit]) : 'Und',
               unit_cost: cost,
               year: new Date().getFullYear(),
@@ -372,7 +438,7 @@ app.whenReady().then(() => {
     }
   })
 
-  // --- HANDLER 6: LISTAR IMPORTACIONES DE MEMORIA ---
+  // HANDLER: LISTAR IMPORTACIONES DE MEMORIA
   ipcMain.handle('get-memory-sources', () => {
     try {
       const rows = db.prepare('SELECT id, name, rows_imported, imported_at, tags FROM memory_imports ORDER BY datetime(imported_at) DESC').all()

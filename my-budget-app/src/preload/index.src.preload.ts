@@ -2,45 +2,28 @@ import { contextBridge, ipcRenderer } from 'electron'
 import { electronAPI } from '@electron-toolkit/preload'
 
 const budgetAPI = {
-  // --- 1. CONEXIONES SQL (LO NUEVO) ---
-  
-  // React: "searchCost" -> Backend: "search-cost" (Búsqueda inteligente)
+  // --- 1. CONEXIONES SQL ---
   searchCost: (query: string) => ipcRenderer.invoke('search-cost', query),
-
-  // React: "saveProjectInternal" -> Backend: "save-project" (Guardado SQL)
-  // IMPORTANTE: Redirigimos la llamada interna al canal correcto de la DB
   saveProjectInternal: (data: any) => ipcRenderer.invoke('save-project', data),
-
-  // React: "getAllProjects" -> Backend: "get-projects" (Lista de inicio)
-  // IMPORTANTE: Redirigimos al canal que devuelve los datos de la DB
   getAllProjects: () => ipcRenderer.invoke('get-projects'),
-
-  // Memoria: listado de importaciones Excel
   getMemorySources: () => ipcRenderer.invoke('get-memory-sources'),
 
-  // --- 2. IMPORTADORES ---
+  getMemoryItems: (sourceId: string) => ipcRenderer.invoke('get-memory-items', sourceId),
 
-  // Importar al Editor (Detectar presupuesto)
+  // --- 2. IMPORTADORES ---
   importToEditor: () => ipcRenderer.invoke('import-to-editor'),
-  
-  // Importar a Memoria (Gestor de memoria)
   importExcel: () => ipcRenderer.invoke('import-excel'),
 
-  // --- 3. FUNCIONES LEGACY / COMPATIBILIDAD (MANTENIDAS) ---
-  // Las dejamos aquí tal como pediste para no romper lógica antigua o futura.
-  
+  // 👇 ESTO ES LO QUE TE FALTABA: LA CONEXIÓN PARA LA IA
+  importSmartBudget: () => ipcRenderer.invoke('import-smart-budget'),
+
+  // --- 3. FUNCIONES LEGACY ---
   addCost: (item: any) => ipcRenderer.invoke('add-cost', item),
-  
-  // Exportar (Tu App.tsx usa ExcelJS interno, pero mantenemos el puente por si acaso)
   exportBudget: (data: any) => ipcRenderer.invoke('export-budget', data),
-  
-  // Alias alternativo para guardar
   saveProject: (data: any) => ipcRenderer.invoke('save-project', data),
-  
   loadProject: () => ipcRenderer.invoke('load-project'),
 }
 
-// --- EXPOSICIÓN AL NAVEGADOR ---
 if (process.contextIsolated) {
   try {
     contextBridge.exposeInMainWorld('electron', electronAPI)
@@ -49,8 +32,8 @@ if (process.contextIsolated) {
     console.error(error)
   }
 } else {
-  // @ts-ignore (define in dts)
+  // @ts-ignore
   window.electron = electronAPI
-  // @ts-ignore (define in dts)
+  // @ts-ignore
   window.budgetAPI = budgetAPI
 }
