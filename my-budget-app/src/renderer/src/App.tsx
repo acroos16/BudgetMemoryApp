@@ -21,7 +21,7 @@ interface BudgetLine {
   quantity: number; frequency: number; unit: string; unit_cost: number; total: number;
   selected: boolean;
 }
-interface BudgetSection { id: string; name: string; collapsed?: boolean; }
+interface BudgetSection { id: string; name: string; collapsed?: boolean; capType?: 'amount' | 'percent'; capValue?: number; }
 interface ProjectFile { meta: ProjectMetadata; sections: BudgetSection[]; lines: BudgetLine[]; }
 interface Snapshot { timestamp: string; data: string; }
 
@@ -174,20 +174,27 @@ const AutoExpandingTextarea = ({ value, onChange, isSubline = false, id, onKeyDo
 
 // --- PANTALLA INICIO ---
 const HomeScreen = ({ onNavigate, projects, onSelectProject }: any) => (
-  <div style={styles.homeContainer}>
-    <div style={styles.dashboardCard}>
-      <div style={styles.dashSidebar}>
-        <h1 style={styles.title}>BudgetCAT 🐱</h1>
-        <button className="menu-btn primary" onClick={() => onNavigate('create-project')} style={{width: '100%', marginBottom: 15, fontFamily: 'Aptos, sans-serif'}}>📝 Nuevo Proyecto</button>
-        <button className="menu-btn secondary" onClick={() => onNavigate('memory-manager')} style={{width: '100%', fontFamily: 'Aptos, sans-serif'}}>🧠 Gestionar Memoria</button>
+  <div className="home-shell">
+    <div className="home-card">
+      <div className="home-sidebar">
+        <h1 className="home-title" style={{fontFamily: 'Aptos, sans-serif'}}>
+          <span className="accent">BudgetCAT</span> 🐱
+        </h1>
+        <div className="home-actions">
+          <button className="home-btn primary" onClick={() => onNavigate('create-project')} style={{fontFamily: 'Aptos, sans-serif'}}>📝 Nuevo Proyecto</button>
+          <button className="home-btn secondary" onClick={() => onNavigate('memory-manager')} style={{fontFamily: 'Aptos, sans-serif'}}>🧠 Gestionar Memoria</button>
+        </div>
       </div>
-      <div style={styles.dashMain}>
-        <h3 style={{color: '#4ec9b0', marginBottom: 20, fontFamily: 'Aptos, sans-serif'}}>📂 Proyectos Recientes</h3>
+      <div className="home-main">
+        <h3 className="home-section-title" style={{fontFamily: 'Aptos, sans-serif'}}>📂 Proyectos Recientes</h3>
         <div style={styles.projectList}>
-          {projects.length === 0 ? <p style={{color:'#666', textAlign:'center', marginTop:50, fontFamily: 'Aptos, sans-serif'}}>No hay proyectos guardados.</p> :
+          {projects.length === 0 ? <p style={{color:'var(--text-muted)', textAlign:'center', marginTop:50, fontFamily: 'Aptos, sans-serif'}}>No hay proyectos guardados.</p> :
             projects.map((p: any) => (
-              <div key={p.id} style={styles.projectCard} onClick={() => onSelectProject(p)}>
-                <div style={{display:'flex', justifyContent:'space-between', fontFamily: 'Aptos, sans-serif'}}><span style={{fontWeight:'bold', color:'#eee'}}>{p.name}</span><span>ABRIR →</span></div>
+              <div key={p.id} className="home-project-card" onClick={() => onSelectProject(p)}>
+                <div style={{display:'flex', justifyContent:'space-between', width: '100%', fontFamily: 'Aptos, sans-serif'}}>
+                  <span style={{fontWeight:'bold'}}>{p.name}</span>
+                  <span>ABRIR →</span>
+                </div>
               </div>
             ))
           }
@@ -322,23 +329,35 @@ const MemoryManagerScreen = ({ onBack, appProjects = [], onDeleteProject, onOpen
   };
 
   return (
-    <div style={styles.homeContainer}>
-      <div style={{...styles.dashboardCard, width: '1000px', height: '650px', flexDirection: 'column', position: 'relative'}}>
-        <div style={{padding: '20px 30px', borderBottom: '1px solid rgba(255,255,255,0.1)', display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
-            <h2 style={{margin:0, color: '#4ec9b0', fontFamily: 'Aptos, sans-serif'}}>🧠 Gestión de Memoria</h2>
-            <button onClick={onBack} style={{...styles.closeBtn, padding: '5px 15px', fontSize: '12px'}}>← Volver</button>
+    <div className="memory-shell">
+      <div className="memory-card" style={{ position: 'relative' }}>
+        <div className="memory-header">
+            <h2 className="memory-title" style={{fontFamily: 'Aptos, sans-serif'}}>🧠 Gestión de Memoria</h2>
+            <button className="editor-close" onClick={onBack} style={{...styles.closeBtn, padding: '5px 15px', fontSize: '12px'}}>← Volver</button>
         </div>
-        <div style={{padding: '20px 30px', display: 'flex', gap: 15, borderBottom: '1px solid rgba(255,255,255,0.05)'}}>
-            <button className="menu-btn primary" onClick={handleImport} style={{width: 'auto', fontSize: 13}}>📥 Importar Excel Nuevo</button>
-            <input placeholder="🔍 Buscar..." value={searchText} onChange={(e) => setSearchText(e.target.value)} style={{...styles.input, marginBottom: 0, width: '300px', background: 'rgba(0,0,0,0.2)'}} />
-            {['all', 'excel', 'app'].map(t => <button key={t} onClick={() => setFilterType(t as any)} style={{background: filterType === t ? '#4ec9b0' : 'transparent', color: filterType === t ? '#000' : '#aaa', border: '1px solid #4ec9b0', borderRadius: 20, padding: '4px 15px', fontSize: 12, textTransform: 'capitalize'}}>{t === 'all' ? 'Todos' : t === 'excel' ? 'Importados' : 'Apps'}</button>)}
+        <div className="memory-toolbar">
+            <button className="ribbon-btn editor-btn-primary" onClick={handleImport} style={{width: 'auto', fontSize: 13}}>📥 Importar Excel Nuevo</button>
+            <input className="memory-search" placeholder="🔍 Buscar..." value={searchText} onChange={(e) => setSearchText(e.target.value)} style={{...styles.input, marginBottom: 0, width: '300px'}} />
+            {['all', 'excel', 'app'].map(t => (
+              <button key={t} className={`memory-filter ${filterType === t ? 'is-active' : ''}`} onClick={() => setFilterType(t as any)} style={{textTransform: 'capitalize'}}>
+                {t === 'all' ? 'Todos' : t === 'excel' ? 'Importados' : 'Apps'}
+              </button>
+            ))}
         </div>
         <div style={{flex: 1, padding: '20px 30px', overflowY: 'auto'}}>
-            <table style={{width: '100%', borderCollapse: 'collapse', color: '#eee', fontSize: '13px'}}>
-                <thead><tr style={{borderBottom: '2px solid #4ec9b0', textAlign: 'left', color: '#4ec9b0'}}><th style={{padding:10}}>Nombre</th><th style={{padding:10}}>Tipo</th><th style={{padding:10}}>Items</th><th style={{padding:10}}>Fecha</th><th style={{padding:10}}>Acciones</th></tr></thead>
+            <table className="memory-table">
+                <thead>
+                  <tr style={{textAlign: 'left'}}>
+                    <th style={{padding:10}}>Nombre</th>
+                    <th style={{padding:10}}>Tipo</th>
+                    <th style={{padding:10}}>Items</th>
+                    <th style={{padding:10}}>Fecha</th>
+                    <th style={{padding:10}}>Acciones</th>
+                  </tr>
+                </thead>
                 <tbody>
                     {filteredSources.map(s => (
-                        <tr key={s.id} style={{borderBottom: '1px solid rgba(255,255,255,0.1)'}}>
+                        <tr key={s.id}>
                             <td style={{padding: 10, fontWeight: 'bold'}}>
                               {isEditing && editingSourceId === s.id ? (
                                 <input
@@ -350,7 +369,8 @@ const MemoryManagerScreen = ({ onBack, appProjects = [], onDeleteProject, onOpen
                                     if (e.key === 'Enter') submitRename(s);
                                     if (e.key === 'Escape') cancelEditing();
                                   }}
-                                  style={{ background: 'transparent', border: '1px solid #4ec9b0', color: '#fff', width: '100%', padding: '4px', borderRadius: 4 }}
+                                  className="memory-search"
+                                  style={{ width: '100%', padding: '4px', borderRadius: 6 }}
                                 />
                               ) : (
                                 <span style={{cursor: 'text'}} onDoubleClick={() => startEditingName(s)} title="Doble clic para renombrar">
@@ -358,21 +378,30 @@ const MemoryManagerScreen = ({ onBack, appProjects = [], onDeleteProject, onOpen
                                 </span>
                               )}
                             </td>
-                            <td style={{padding: 10}}><span style={{background: s.type === 'excel' ? 'rgba(76,175,80,0.2)' : 'rgba(33,150,243,0.2)', color: s.type === 'excel' ? '#81c784' : '#64b5f6', padding: '2px 8px', borderRadius: 4, fontSize: 10}}>{s.type.toUpperCase()}</span></td>
-                            <td style={{padding: 10, color: '#aaa'}}>{s.count}</td>
-                            <td style={{padding: 10, color: '#aaa'}}>{s.date}</td>
-                            <td style={{padding: 10, textAlign: 'right'}}>
-                                <button onClick={(e) => handleDownload(e, s)} style={{background: 'transparent', border: 'none', cursor: 'pointer', marginRight: 10, fontSize: 16}} title="Descargar">⬇️</button>
+                            <td style={{padding: 10}}>
+                              <span className={`memory-pill ${s.type === 'excel' ? 'is-excel' : 'is-app'}`}>{s.type.toUpperCase()}</span>
+                            </td>
+                            <td style={{padding: 10, color: 'var(--text-muted)'}}>{s.count}</td>
+                            <td style={{padding: 10, color: 'var(--text-muted)'}}>{s.date}</td>
+                            <td className="memory-actions" style={{padding: 10, textAlign: 'right', display: 'flex', justifyContent: 'flex-end', gap: 8}}>
+                                <button onClick={(e) => handleDownload(e, s)} title="Descargar">⬇️</button>
                                 {/* 👇 AQUÍ ESTÁ EL CAMBIO IMPORTANTE: EL LÁPIZ AHORA EDITA */}
-                                <button onClick={() => onOpenEditor(s)} style={{background: 'transparent', border: 'none', cursor: 'pointer', marginRight: 10, fontSize: 16}} title="Abrir en Editor">✏️</button>
-                                <button onClick={(e) => handleDelete(e, s.id, s.type)} style={{background: 'transparent', border: 'none', cursor: 'pointer', fontSize: 16}} title="Eliminar">🗑️</button>
+                                <button onClick={() => onOpenEditor(s)} title="Abrir en Editor">✏️</button>
+                                <button onClick={(e) => handleDelete(e, s.id, s.type)} title="Eliminar">🗑️</button>
                             </td>
                         </tr>
                     ))}
                 </tbody>
             </table>
         </div>
-        {isAiLoading && <div style={{position: 'absolute', inset: 0, background: 'rgba(30,30,30,0.95)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', borderRadius: 15, zIndex: 999}}><div style={{fontSize: 50}}>🧠🐱</div><h3 style={{color:'#4ec9b0'}}>Leyendo...</h3></div>}
+        {isAiLoading && (
+          <div className="memory-overlay">
+            <div className="editor-overlay-card">
+              <div className="editor-overlay-emoji">🧠🐱</div>
+              <h3 className="editor-overlay-title" style={{fontFamily: 'Aptos, sans-serif'}}>Leyendo...</h3>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   )
@@ -381,20 +410,24 @@ const MemoryManagerScreen = ({ onBack, appProjects = [], onDeleteProject, onOpen
 const CreateProjectScreen = ({ onStart, onBack, onImportToEditor }: any) => {
   const [meta, setMeta] = useState<ProjectMetadata>({ donor: '', country: 'Perú', currency: 'PEN', sector: '', duration: 12, usdRate: 3.75, eurRate: 4.05 });
   return (
-    <div style={styles.homeContainer}><div style={styles.formContainer}>
-      <h2 style={{fontFamily: 'Aptos, sans-serif'}}>Configurar Proyecto</h2>
-      <input style={styles.input} placeholder="Donante" onChange={e => setMeta({...meta, donor: e.target.value})} />
-      <input style={styles.input} placeholder="Sector" onChange={e => setMeta({...meta, sector: e.target.value})} />
-      <div style={{display:'flex', gap:10}}>
-        <select style={styles.input} value={meta.currency} onChange={e => setMeta({...meta, currency: e.target.value})}>
-            <option value="PEN">PEN</option><option value="USD">USD</option><option value="EUR">EUR</option>
-        </select>
-        <input type="number" style={styles.input} placeholder="Meses" onChange={e => setMeta({...meta, duration: parseInt(e.target.value)})} />
+    <div style={styles.homeContainer} className="form-shell">
+      <div className="form-card">
+        <h2 className="form-title" style={{fontFamily: 'Aptos, sans-serif'}}>Configurar Proyecto</h2>
+        <input className="form-field" placeholder="Donante" onChange={e => setMeta({...meta, donor: e.target.value})} />
+        <input className="form-field" placeholder="Sector" onChange={e => setMeta({...meta, sector: e.target.value})} />
+        <div style={{display:'flex', gap:10}}>
+          <select className="form-field" value={meta.currency} onChange={e => setMeta({...meta, currency: e.target.value})}>
+              <option value="PEN">PEN</option><option value="USD">USD</option><option value="EUR">EUR</option>
+          </select>
+          <input type="number" className="form-field" placeholder="Meses" onChange={e => setMeta({...meta, duration: parseInt(e.target.value)})} />
+        </div>
+        <div className="form-actions">
+          <button className="form-btn primary" style={{fontFamily: 'Aptos, sans-serif'}} onClick={() => onStart(meta)}>Empezar</button>
+          <button className="form-btn secondary" style={{fontFamily: 'Aptos, sans-serif'}} onClick={() => onImportToEditor(meta)} title="Importación asistida con IA">Importar Excel (IA)</button>
+          <button className="form-btn ghost" style={{fontFamily: 'Aptos, sans-serif'}} onClick={onBack}>Atrás</button>
+        </div>
       </div>
-      <button className="menu-btn primary" style={{fontFamily: 'Aptos, sans-serif'}} onClick={() => onStart(meta)}>Empezar</button>
-      <button className="menu-btn secondary" style={{fontFamily: 'Aptos, sans-serif', marginTop:10}} onClick={() => onImportToEditor(meta)} title="Importación asistida con IA">Importar Excel (IA)</button>
-      <button className="menu-btn danger" style={{fontFamily: 'Aptos, sans-serif', marginTop:10}} onClick={onBack}>Atrás</button>
-    </div></div>
+    </div>
   )
 }
 
@@ -515,7 +548,7 @@ const EditorScreen = ({ initialData, onBack }: { initialData: ProjectFile, onBac
   const toggleSection = (sectionId: string) => setSections(prev => prev.map(s => s.id === sectionId ? { ...s, collapsed: !s.collapsed } : s));
   const handleKeyDown = (e: React.KeyboardEvent, line: BudgetLine, field: string) => {
     if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); addNewLine(line.sectionId, line.parentId); return; }
-    if (e.key === 'Delete' && (e.ctrlKey || !['description', 'category', 'unit'].includes(field))) { if (e.ctrlKey) { e.preventDefault(); deleteLine(line.id); return; } }
+    if ((e.key === 'Delete' || e.key === 'Backspace') && (e.ctrlKey || e.metaKey)) { e.preventDefault(); deleteLine(line.id); return; }
     if ((e.ctrlKey || e.metaKey) && e.key === 'd') { e.preventDefault(); duplicateLine(line.id); return; }
     const isText = ['description', 'category', 'unit'].includes(field);
     const target = e.target as HTMLTextAreaElement | HTMLInputElement;
@@ -627,123 +660,162 @@ const EditorScreen = ({ initialData, onBack }: { initialData: ProjectFile, onBac
 
   const grandTotal = lines.reduce((acc, curr) => acc + (curr.parentId ? 0 : curr.total), 0);
   const sectionTotals = sections.map(s => ({ name: s.name, total: lines.filter(l => l.sectionId === s.id && !l.parentId).reduce((sum, l) => sum + l.total, 0) }));
+  const updateSection = (id: string, patch: Partial<BudgetSection>) => setSections(prev => prev.map(s => s.id === id ? { ...s, ...patch } : s));
 
   return (
-    <div style={{ height: '100vh', display: 'flex', flexDirection: 'column', background: '#fff', overflow: 'hidden', fontFamily: 'Aptos, sans-serif' }}>
-      <div style={styles.topBar}>
+    <div className="editor-shell" style={{ overflow: 'hidden', fontFamily: 'Aptos, sans-serif' }}>
+      <div className="editor-topbar" style={styles.topBar}>
         <div style={{display:'flex', alignItems:'center', gap:10}}>
           <span style={{fontFamily: 'Aptos, sans-serif'}}>🐱 <b>BudgetCAT</b></span>
-          <input style={styles.headerEditableInput} value={project.donor} onChange={e => setProject({...project, donor: e.target.value})} />
+          <input className="editor-field" style={styles.headerEditableInput} value={project.donor} onChange={e => setProject({...project, donor: e.target.value})} />
           <div style={styles.exchangeRateContainer}>
              <span>1 USD = S/</span> <input type="number" step="0.01" style={styles.rateInput} value={project.usdRate} onChange={e => setProject({...project, usdRate: parseFloat(e.target.value)})} />
              <span>1 EUR = S/</span> <input type="number" step="0.01" style={styles.rateInput} value={project.eurRate} onChange={e => setProject({...project, eurRate: parseFloat(e.target.value)})} />
           </div>
-          <select style={styles.headerSelect} value={project.currency} onChange={e => setProject({...project, currency: e.target.value})}>
+          <select className="editor-field editor-select" style={styles.headerSelect} value={project.currency} onChange={e => setProject({...project, currency: e.target.value})}>
             <option value="PEN">PEN</option><option value="USD">USD</option><option value="EUR">EUR</option>
           </select>
         </div>
-        <button onClick={onBack} style={{...styles.closeBtn, fontFamily: 'Aptos, sans-serif'}}>Cerrar</button>
+        <button className="editor-close" onClick={onBack} style={{...styles.closeBtn, fontFamily: 'Aptos, sans-serif'}}>Cerrar</button>
       </div>
-      <div className="ribbon">
+      <div className="ribbon editor-ribbon">
         <button className="ribbon-btn" style={{fontFamily: 'Aptos, sans-serif'}} onClick={() => { const id = generateId(); setSections([...sections, { id, name: 'Nueva Sección' }]); addNewLine(id); }}>📂 + Sección</button>
         {/* 👇 BOTÓN NUEVO DE IA */}
-        <button className="ribbon-btn" style={{fontFamily: 'Aptos, sans-serif', color: '#6a1b9a', background: '#f3e5f5', border: '1px solid #ce93d8'}} onClick={handleSmartImport}>✨ Importar IA</button>
+        <button className="ribbon-btn editor-btn-primary" style={{fontFamily: 'Aptos, sans-serif'}} onClick={handleSmartImport}>✨ Importar IA</button>
         
         <button className="ribbon-btn" style={{fontFamily: 'Aptos, sans-serif'}} onClick={async () => { await window.budgetAPI.saveProjectInternal({ name: `${project.donor}`, ...project, data_json: JSON.stringify({ sections, lines }) }); alert("💾 Guardado"); }}>💾 Guardar</button>
-        <button className="ribbon-btn" style={{fontFamily: 'Aptos, sans-serif', background: '#ff9800'}} onClick={takeSnapshot}>📸 Foto</button>
+        <button className="ribbon-btn editor-btn-warm" style={{fontFamily: 'Aptos, sans-serif'}} onClick={takeSnapshot}>📸 Foto</button>
         <div style={{display:'flex', alignItems:'center', marginLeft: 10}}>
              {snapshots.map((s, i) => <span key={i} onClick={() => restoreSnapshot(s)} style={styles.snapshotBadge}>v{snapshots.length - i}</span>)}
         </div>
         <button className="ribbon-btn" style={{fontFamily: 'Aptos, sans-serif', marginLeft: 'auto', marginRight: 10}} onClick={() => generateBudgetExcel(project, sections, lines)}>📤 Exportar</button>
-        <div style={styles.searchContainer}><span style={{fontSize: 12, marginRight: 5, color: '#333'}}>🔍</span><input style={styles.searchInput} placeholder="Filtrar..." value={filterText} onChange={(e) => setFilterText(e.target.value)} /></div>
+        <div className="editor-search" style={styles.searchContainer}><span style={{fontSize: 12, marginRight: 5}}>🔍</span><input style={styles.searchInput} placeholder="Filtrar..." value={filterText} onChange={(e) => setFilterText(e.target.value)} /></div>
       </div>
 
       <div style={{flex:1, display:'flex', overflow:'hidden'}}>
         <div style={{flex:3, overflow:'auto'}}>
-          <table style={{width: '100%', tableLayout: 'fixed', borderCollapse: 'separate', borderSpacing: 0, fontFamily: 'Aptos, sans-serif', border: '1px solid #ddd'}}>
-            <thead style={{position: 'sticky', top: 0, zIndex: 10, background: '#fff'}}>
+          <table className="editor-table" style={{fontFamily: 'Aptos, sans-serif'}}>
+            <thead className="editor-table-head" style={{position: 'sticky', top: 0, zIndex: 10}}>
               <tr style={{fontSize: '12px', textAlign: 'left'}}>
-                <th style={{width: '35px', padding: '10px', borderBottom: '1px solid #ddd'}}>✔</th>
-                <th style={{width: '90px', borderBottom: '1px solid #ddd'}}>Cat.</th>
-                <th style={{width: 'auto', minWidth: '400px', borderBottom: '1px solid #ddd'}}>Descripción</th>
-                <th style={{width: '60px', borderBottom: '1px solid #ddd'}}>Cant</th>
-                <th style={{width: '60px', borderBottom: '1px solid #ddd'}}>Unid</th>
-                <th style={{width: '45px', borderBottom: '1px solid #ddd'}}>Freq</th>
-                <th style={{width: '90px', borderBottom: '1px solid #ddd'}}>C*U</th>
-                <th style={{width: '115px', borderBottom: '1px solid #ddd'}}>Total</th>
-                <th style={{width: '45px', borderBottom: '1px solid #ddd', fontSize: '11px', color: '#666'}}>%</th>
-                <th style={{width: '80px', borderBottom: '1px solid #ddd'}}>+Sub</th>
+                <th style={{width: '35px', padding: '10px'}}>✔</th>
+                <th style={{width: '90px'}}>Cat.</th>
+                <th style={{width: 'auto', minWidth: '400px'}}>Descripción</th>
+                <th style={{width: '60px'}}>Cant</th>
+                <th style={{width: '60px'}}>Unid</th>
+                <th style={{width: '45px'}}>Freq</th>
+                <th style={{width: '90px'}}>C*U</th>
+                <th style={{width: '115px'}}>Total</th>
+                <th style={{width: '45px', fontSize: '11px'}}>%</th>
+                <th style={{width: '80px'}}>+Sub</th>
               </tr>
             </thead>
             <tbody>
               {sections.map(s => {
                 const sectionTotal = lines.filter(l => l.sectionId === s.id && !l.parentId).reduce((sum, l) => sum + l.total, 0);
+                const capLimit = s.capType ? (s.capType === 'amount' ? (s.capValue || 0) : (grandTotal * ((s.capValue || 0) / 100))) : null;
+                const isOverCap = capLimit !== null && sectionTotal > capLimit;
                 return (
                   <React.Fragment key={s.id}>
-                    <tr style={{background: '#f8f9fa', position: 'sticky', top: '37px', zIndex: 9}} onDragOver={handleDragOver} onDrop={(e) => handleDropOnSection(e, s.id)}>
-                      <td style={{padding:'5px', borderBottom: '1px solid #ddd', textAlign:'center'}}><button onClick={() => toggleSection(s.id)} style={{border:'none', background:'transparent', cursor:'pointer', fontWeight:'bold', fontSize:14, color:'#555'}}>{s.collapsed ? '▶' : '▼'}</button></td>
-                      <td colSpan={5} style={{padding:'5px', borderBottom: '1px solid #ddd'}}><input style={{...styles.sectionInput, fontFamily: 'Aptos, sans-serif'}} value={s.name} onChange={(e) => setSections(sections.map(sec => sec.id === s.id ? {...sec, name: e.target.value} : sec))} /></td>
-                      <td colSpan={4} style={{textAlign:'right', paddingRight:15, fontWeight:'bold', color:'#006673', borderBottom: '1px solid #ddd'}}><span style={{fontSize: '11px', color: '#666', marginRight: '10px', fontWeight: 'bold'}}>{fmtPct(sectionTotal, grandTotal)}</span>Subtotal: {fmt(sectionTotal)}</td>
+                    <tr className={`editor-section-row ${isOverCap ? 'cap-warning' : ''}`} style={{position: 'sticky', top: '37px', zIndex: 9}} onDragOver={handleDragOver} onDrop={(e) => handleDropOnSection(e, s.id)}>
+                      <td style={{padding:'5px', textAlign:'center'}}><button onClick={() => toggleSection(s.id)} style={{border:'none', background:'transparent', cursor:'pointer', fontWeight:'bold', fontSize:14, color:'var(--text-muted)'}}>{s.collapsed ? '▶' : '▼'}</button></td>
+                      <td colSpan={5} style={{padding:'5px'}}>
+                        <div className="cap-row">
+                          <input style={{...styles.sectionInput, fontFamily: 'Aptos, sans-serif'}} value={s.name} onChange={(e) => updateSection(s.id, { name: e.target.value })} />
+                          <div className="cap-control">
+                            <span className="cap-label">Límite</span>
+                            <select
+                              className="cap-select"
+                              value={s.capType || 'none'}
+                              onChange={(e) => updateSection(s.id, { capType: e.target.value === 'none' ? undefined : (e.target.value as BudgetSection['capType']), capValue: e.target.value === 'none' ? undefined : (s.capValue || 0) })}
+                            >
+                              <option value="none">Sin</option>
+                              <option value="amount">Monto</option>
+                              <option value="percent">%</option>
+                            </select>
+                            {s.capType && (
+                              <input
+                                className="cap-input"
+                                type="number"
+                                min={0}
+                                step={s.capType === 'percent' ? 1 : 0.01}
+                                placeholder={s.capType === 'percent' ? '0-100' : project.currency}
+                                value={s.capValue ?? ''}
+                                onChange={(e) => updateSection(s.id, { capValue: parseFloat(e.target.value) || 0 })}
+                              />
+                            )}
+                          </div>
+                        </div>
+                      </td>
+                      <td colSpan={4} className={isOverCap ? 'cap-warning-text' : ''} style={{textAlign:'right', paddingRight:15, fontWeight:'bold', color:'var(--text-main)'}}>
+                        {isOverCap && <span className="cap-warning-icon">⚠️</span>}
+                        <span style={{fontSize: '11px', color: isOverCap ? '#f87171' : 'var(--text-muted)', marginRight: '10px', fontWeight: 'bold'}}>{fmtPct(sectionTotal, grandTotal)}</span>
+                        Subtotal: {fmt(sectionTotal)}
+                        {s.capType && (
+                          <span className="cap-limit-note">
+                            Límite: {s.capType === 'amount' ? `${project.currency} ${fmt(s.capValue || 0)}` : `${s.capValue || 0}% (${project.currency} ${fmt(capLimit || 0)})`}
+                          </span>
+                        )}
+                      </td>
                     </tr>
                     {!s.collapsed && lines.filter(l => l.sectionId === s.id && !l.parentId && isLineVisible(l)).map(mainLine => {
                       const hasChildren = lines.some(sub => sub.parentId === mainLine.id);
                       return (
                         <React.Fragment key={mainLine.id}>
-                          <tr style={{background: activeRowId === mainLine.id ? '#e8f4f4' : '#fff', cursor: 'pointer'}} onClick={() => setActiveRowId(mainLine.id)} draggable onDragStart={(e) => handleDragStart(e, mainLine.id)} onDragOver={handleDragOver} onDrop={(e) => handleDropOnSection(e, s.id)}>
-                            <td style={{textAlign:'center', borderBottom: '1px solid #eee', cursor: 'grab'}}><div style={{display:'flex', alignItems:'center', justifyContent:'center'}}><span style={{color:'#ccc', marginRight:4, fontSize:10}}>⠿</span><input type="checkbox" checked={mainLine.selected} onChange={() => setLines(lines.map(x => x.id === mainLine.id ? {...x, selected: !x.selected} : x))} /></div></td>
-                            <td style={{borderBottom: '1px solid #eee'}}><AutoExpandingTextarea id={`cell-${mainLine.id}-category`} onPaste={(e: any) => handlePaste(e, mainLine.id, 'category')} onFocus={() => handleCellFocus(mainLine)} onKeyDown={(e:any) => handleKeyDown(e, mainLine, 'category')} value={mainLine.category} onChange={(v:any) => updateLine(mainLine.id, 'category', v)} /></td>
-                            <td style={{borderBottom: '1px solid #eee'}}>
+                          <tr className={`editor-row ${activeRowId === mainLine.id ? 'is-active' : ''}`} style={{cursor: 'pointer'}} onClick={() => setActiveRowId(mainLine.id)} draggable onDragStart={(e) => handleDragStart(e, mainLine.id)} onDragOver={handleDragOver} onDrop={(e) => handleDropOnSection(e, s.id)}>
+                            <td style={{textAlign:'center', cursor: 'grab'}}><div style={{display:'flex', alignItems:'center', justifyContent:'center'}}><span style={{color:'var(--text-muted)', marginRight:4, fontSize:10}}>⠿</span><input type="checkbox" checked={mainLine.selected} onChange={() => setLines(lines.map(x => x.id === mainLine.id ? {...x, selected: !x.selected} : x))} /></div></td>
+                            <td><AutoExpandingTextarea id={`cell-${mainLine.id}-category`} onPaste={(e: any) => handlePaste(e, mainLine.id, 'category')} onFocus={() => handleCellFocus(mainLine)} onKeyDown={(e:any) => handleKeyDown(e, mainLine, 'category')} value={mainLine.category} onChange={(v:any) => updateLine(mainLine.id, 'category', v)} /></td>
+                            <td>
                                 <div style={{display: 'flex', flexDirection: 'column'}}>
                                     <AutoExpandingTextarea id={`cell-${mainLine.id}-description`} onPaste={(e: any) => handlePaste(e, mainLine.id, 'description')} onFocus={() => handleCellFocus(mainLine)} onKeyDown={(e:any) => handleKeyDown(e, mainLine, 'description')} value={mainLine.description} onChange={(v:any) => updateLine(mainLine.id, 'description', v)} />
                                     {mainLine.showNotes && (<input placeholder="📝 Justificación técnica..." value={mainLine.notes || ''} onChange={(e) => updateLine(mainLine.id, 'notes', e.target.value)} style={styles.narrativeInput} autoFocus />)}
                                 </div>
                             </td>
-                            <td style={{borderBottom: '1px solid #eee'}}><input id={`cell-${mainLine.id}-quantity`} onPaste={(e: any) => handlePaste(e, mainLine.id, 'quantity')} onFocus={() => handleCellFocus(mainLine)} onKeyDown={(e) => handleKeyDown(e, mainLine, 'quantity')} style={{...styles.gridInput, fontFamily: 'Aptos, sans-serif'}} type="number" value={mainLine.quantity} onChange={e => updateLine(mainLine.id, 'quantity', parseFloat(e.target.value))} /></td>
-                            <td style={{borderBottom: '1px solid #eee'}}><AutoExpandingTextarea id={`cell-${mainLine.id}-unit`} onPaste={(e: any) => handlePaste(e, mainLine.id, 'unit')} onFocus={() => handleCellFocus(mainLine)} onKeyDown={(e:any) => handleKeyDown(e, mainLine, 'unit')} value={mainLine.unit} onChange={(v:any) => updateLine(mainLine.id, 'unit', v)} /></td>
-                            <td style={{borderBottom: '1px solid #eee'}}><input id={`cell-${mainLine.id}-frequency`} onPaste={(e: any) => handlePaste(e, mainLine.id, 'frequency')} onFocus={() => handleCellFocus(mainLine)} onKeyDown={(e) => handleKeyDown(e, mainLine, 'frequency')} style={{...styles.gridInput, fontFamily: 'Aptos, sans-serif'}} type="number" value={mainLine.frequency} onChange={e => updateLine(mainLine.id, 'frequency', parseFloat(e.target.value))} /></td>
-                            <td style={{borderBottom: '1px solid #eee', background: hasChildren ? 'rgba(0,0,0,0.03)' : 'transparent'}}><input id={`cell-${mainLine.id}-unit_cost`} onPaste={(e: any) => handlePaste(e, mainLine.id, 'unit_cost')} onFocus={() => handleCellFocus(mainLine)} onKeyDown={(e) => handleKeyDown(e, mainLine, 'unit_cost')} style={{...styles.gridInput, fontFamily: 'Aptos, sans-serif', fontWeight: hasChildren ? 'bold' : 'normal'}} type="number" value={mainLine.unit_cost} disabled={hasChildren} onChange={e => updateLine(mainLine.id, 'unit_cost', parseFloat(e.target.value))} /></td>
-                            <td style={{textAlign:'right', fontWeight:'bold', paddingRight:10, borderBottom: '1px solid #eee'}}>{fmt(mainLine.total)}</td>
-                            <td style={{borderBottom: '1px solid #eee'}}></td>
-                            <td style={{textAlign:'center', borderBottom: '1px solid #eee'}}><button onClick={(e) => { e.stopPropagation(); toggleNotes(mainLine.id); }} style={{...styles.iconBtn, color: mainLine.notes ? '#4ec9b0' : '#aaa'}}>📝</button><button onClick={(e) => { e.stopPropagation(); addNewLine(s.id, mainLine.id); }} style={styles.addSubBtn}>+ Sub</button></td>
+                            <td><input id={`cell-${mainLine.id}-quantity`} onPaste={(e: any) => handlePaste(e, mainLine.id, 'quantity')} onFocus={() => handleCellFocus(mainLine)} onKeyDown={(e) => handleKeyDown(e, mainLine, 'quantity')} style={{...styles.gridInput, fontFamily: 'Aptos, sans-serif'}} type="number" value={mainLine.quantity} onChange={e => updateLine(mainLine.id, 'quantity', parseFloat(e.target.value))} /></td>
+                            <td><AutoExpandingTextarea id={`cell-${mainLine.id}-unit`} onPaste={(e: any) => handlePaste(e, mainLine.id, 'unit')} onFocus={() => handleCellFocus(mainLine)} onKeyDown={(e:any) => handleKeyDown(e, mainLine, 'unit')} value={mainLine.unit} onChange={(v:any) => updateLine(mainLine.id, 'unit', v)} /></td>
+                            <td><input id={`cell-${mainLine.id}-frequency`} onPaste={(e: any) => handlePaste(e, mainLine.id, 'frequency')} onFocus={() => handleCellFocus(mainLine)} onKeyDown={(e) => handleKeyDown(e, mainLine, 'frequency')} style={{...styles.gridInput, fontFamily: 'Aptos, sans-serif'}} type="number" value={mainLine.frequency} onChange={e => updateLine(mainLine.id, 'frequency', parseFloat(e.target.value))} /></td>
+                            <td style={{background: hasChildren ? 'rgba(0,0,0,0.08)' : 'transparent'}}><input id={`cell-${mainLine.id}-unit_cost`} onPaste={(e: any) => handlePaste(e, mainLine.id, 'unit_cost')} onFocus={() => handleCellFocus(mainLine)} onKeyDown={(e) => handleKeyDown(e, mainLine, 'unit_cost')} style={{...styles.gridInput, fontFamily: 'Aptos, sans-serif', fontWeight: hasChildren ? 'bold' : 'normal'}} type="number" value={mainLine.unit_cost} disabled={hasChildren} onChange={e => updateLine(mainLine.id, 'unit_cost', parseFloat(e.target.value))} /></td>
+                            <td style={{textAlign:'right', fontWeight:'bold', paddingRight:10}}>{fmt(mainLine.total)}</td>
+                            <td></td>
+                            <td style={{textAlign:'center'}}><button className="editor-icon-btn" onClick={(e) => { e.stopPropagation(); toggleNotes(mainLine.id); }} style={{...styles.iconBtn, color: mainLine.notes ? 'var(--primary)' : 'var(--text-muted)'}}>📝</button><button className="editor-sub-btn" onClick={(e) => { e.stopPropagation(); addNewLine(s.id, mainLine.id); }} style={styles.addSubBtn}>+ Sub</button></td>
                           </tr>
                           {lines.filter(sub => sub.parentId === mainLine.id && isLineVisible(sub)).map(subLine => (
-                            <tr key={subLine.id} style={{background: activeRowId === subLine.id ? '#e8f4f4' : '#fafafa', cursor: 'pointer'}} onClick={() => setActiveRowId(subLine.id)} draggable onDragStart={(e) => handleDragStart(e, subLine.id)} onDragOver={handleDragOver} onDrop={(e) => handleDropOnSection(e, s.id)}>
-                              <td style={{borderBottom: '1px solid #eee', textAlign:'center', cursor: 'grab'}}><span style={{color:'#ccc', fontSize:10}}>⠿</span></td>
-                              <td style={{borderLeft: '3px solid #4ec9b0', borderBottom: '1px solid #eee'}}><AutoExpandingTextarea id={`cell-${subLine.id}-category`} onPaste={(e: any) => handlePaste(e, subLine.id, 'category')} onFocus={() => handleCellFocus(subLine)} onKeyDown={(e:any) => handleKeyDown(e, subLine, 'category')} value={subLine.category} onChange={(v:any) => updateLine(subLine.id, 'category', v)} /></td>
-                              <td style={{borderBottom: '1px solid #eee'}}>
+                            <tr key={subLine.id} className={`editor-row editor-subrow ${activeRowId === subLine.id ? 'is-active' : ''}`} style={{cursor: 'pointer'}} onClick={() => setActiveRowId(subLine.id)} draggable onDragStart={(e) => handleDragStart(e, subLine.id)} onDragOver={handleDragOver} onDrop={(e) => handleDropOnSection(e, s.id)}>
+                              <td style={{textAlign:'center', cursor: 'grab'}}><span style={{color:'var(--text-muted)', fontSize:10}}>⠿</span></td>
+                              <td style={{borderLeft: '3px solid rgba(139, 92, 246, 0.6)'}}><AutoExpandingTextarea id={`cell-${subLine.id}-category`} onPaste={(e: any) => handlePaste(e, subLine.id, 'category')} onFocus={() => handleCellFocus(subLine)} onKeyDown={(e:any) => handleKeyDown(e, subLine, 'category')} value={subLine.category} onChange={(v:any) => updateLine(subLine.id, 'category', v)} /></td>
+                              <td>
                                   <div style={{display: 'flex', flexDirection: 'column'}}>
                                       <AutoExpandingTextarea id={`cell-${subLine.id}-description`} onPaste={(e: any) => handlePaste(e, subLine.id, 'description')} onFocus={() => handleCellFocus(subLine)} onKeyDown={(e:any) => handleKeyDown(e, subLine, 'description')} value={subLine.description} onChange={(v:any) => updateLine(subLine.id, 'description', v)} isSubline />
                                       {subLine.showNotes && (<input placeholder="📝 Justificación técnica..." value={subLine.notes || ''} onChange={(e) => updateLine(subLine.id, 'notes', e.target.value)} style={{...styles.narrativeInput, paddingLeft: '25px'}} autoFocus />)}
                                   </div>
                               </td>
-                              <td style={{borderBottom: '1px solid #eee'}}><input id={`cell-${subLine.id}-quantity`} onPaste={(e: any) => handlePaste(e, subLine.id, 'quantity')} onFocus={() => handleCellFocus(subLine)} onKeyDown={(e) => handleKeyDown(e, subLine, 'quantity')} style={{...styles.gridInput, fontFamily: 'Aptos, sans-serif'}} type="number" value={subLine.quantity} onChange={e => updateLine(subLine.id, 'quantity', parseFloat(e.target.value))} /></td>
-                              <td style={{borderBottom: '1px solid #eee'}}><AutoExpandingTextarea id={`cell-${subLine.id}-unit`} onPaste={(e: any) => handlePaste(e, subLine.id, 'unit')} onFocus={() => handleCellFocus(subLine)} onKeyDown={(e:any) => handleKeyDown(e, subLine, 'unit')} value={subLine.unit} onChange={(v:any) => updateLine(subLine.id, 'unit', v)} /></td>
-                              <td style={{borderBottom: '1px solid #eee'}}><input id={`cell-${subLine.id}-frequency`} onPaste={(e: any) => handlePaste(e, subLine.id, 'frequency')} onFocus={() => handleCellFocus(subLine)} onKeyDown={(e) => handleKeyDown(e, subLine, 'frequency')} style={{...styles.gridInput, fontFamily: 'Aptos, sans-serif'}} type="number" value={subLine.frequency} onChange={e => updateLine(subLine.id, 'frequency', parseFloat(e.target.value))} /></td>
-                              <td style={{borderBottom: '1px solid #eee'}}><input id={`cell-${subLine.id}-unit_cost`} onPaste={(e: any) => handlePaste(e, subLine.id, 'unit_cost')} onFocus={() => handleCellFocus(subLine)} onKeyDown={(e) => handleKeyDown(e, subLine, 'unit_cost')} style={{...styles.gridInput, fontFamily: 'Aptos, sans-serif'}} type="number" value={subLine.unit_cost} onChange={e => updateLine(subLine.id, 'unit_cost', parseFloat(e.target.value))} /></td>
-                              <td style={{textAlign:'right', fontSize:11, paddingRight:10, borderBottom: '1px solid #eee'}}>{fmt(subLine.total)}</td>
-                              <td style={{borderBottom: '1px solid #eee'}}></td>
-                              <td style={{borderBottom: '1px solid #eee', textAlign: 'center'}}><button onClick={(e) => { e.stopPropagation(); toggleNotes(subLine.id); }} style={{...styles.iconBtn, color: subLine.notes ? '#4ec9b0' : '#aaa'}}>📝</button></td>
+                              <td><input id={`cell-${subLine.id}-quantity`} onPaste={(e: any) => handlePaste(e, subLine.id, 'quantity')} onFocus={() => handleCellFocus(subLine)} onKeyDown={(e) => handleKeyDown(e, subLine, 'quantity')} style={{...styles.gridInput, fontFamily: 'Aptos, sans-serif'}} type="number" value={subLine.quantity} onChange={e => updateLine(subLine.id, 'quantity', parseFloat(e.target.value))} /></td>
+                              <td><AutoExpandingTextarea id={`cell-${subLine.id}-unit`} onPaste={(e: any) => handlePaste(e, subLine.id, 'unit')} onFocus={() => handleCellFocus(subLine)} onKeyDown={(e:any) => handleKeyDown(e, subLine, 'unit')} value={subLine.unit} onChange={(v:any) => updateLine(subLine.id, 'unit', v)} /></td>
+                              <td><input id={`cell-${subLine.id}-frequency`} onPaste={(e: any) => handlePaste(e, subLine.id, 'frequency')} onFocus={() => handleCellFocus(subLine)} onKeyDown={(e) => handleKeyDown(e, subLine, 'frequency')} style={{...styles.gridInput, fontFamily: 'Aptos, sans-serif'}} type="number" value={subLine.frequency} onChange={e => updateLine(subLine.id, 'frequency', parseFloat(e.target.value))} /></td>
+                              <td><input id={`cell-${subLine.id}-unit_cost`} onPaste={(e: any) => handlePaste(e, subLine.id, 'unit_cost')} onFocus={() => handleCellFocus(subLine)} onKeyDown={(e) => handleKeyDown(e, subLine, 'unit_cost')} style={{...styles.gridInput, fontFamily: 'Aptos, sans-serif'}} type="number" value={subLine.unit_cost} onChange={e => updateLine(subLine.id, 'unit_cost', parseFloat(e.target.value))} /></td>
+                              <td style={{textAlign:'right', fontSize:11, paddingRight:10}}>{fmt(subLine.total)}</td>
+                              <td></td>
+                              <td style={{textAlign: 'center'}}><button className="editor-icon-btn" onClick={(e) => { e.stopPropagation(); toggleNotes(subLine.id); }} style={{...styles.iconBtn, color: subLine.notes ? 'var(--primary)' : 'var(--text-muted)'}}>📝</button></td>
                             </tr>
                           ))}
                         </React.Fragment>
                       );
                     })}
-                    {!filterText && !s.collapsed && <tr onClick={() => addNewLine(s.id)} style={{cursor: 'pointer'}}><td colSpan={10} style={{padding: '8px', fontSize: '11px', color: '#006673'}}>+ Añadir línea a {s.name}</td></tr>}
+                    {!filterText && !s.collapsed && <tr onClick={() => addNewLine(s.id)} style={{cursor: 'pointer'}}><td colSpan={10} style={{padding: '8px', fontSize: '11px', color: 'var(--text-muted)'}}>+ Añadir línea a {s.name}</td></tr>}
                   </React.Fragment>
                 );
               })}
             </tbody>
           </table>
         </div>
-        <div style={{flex:1, background:'#f9f9f9', borderLeft:'1px solid #ddd', padding:10, overflowY:'auto', display: 'flex', flexDirection: 'column'}}>
+        <div className="editor-sidebar" style={{flex:1, padding:10, overflowY:'auto', display: 'flex', flexDirection: 'column'}}>
           <div style={{flex: 1, overflowY: 'auto', marginBottom: 20, minHeight: '150px'}}>
-            <div style={{fontWeight:'bold', fontSize:12, color: '#666', borderBottom: '1px solid #ccc', paddingBottom: 5, fontFamily: 'Aptos, sans-serif', marginBottom: 10}}>MEMORIA HISTÓRICA</div>
-            {suggestions.length === 0 ? <p style={{fontSize: 11, textAlign:'center', color: '#999', marginTop: 10}}>Selecciona una línea con descripción para buscar costos.</p> :
+            <div className="editor-panel-title" style={{fontWeight:'bold', fontSize:12, paddingBottom: 5, fontFamily: 'Aptos, sans-serif', marginBottom: 10}}>MEMORIA HISTÓRICA</div>
+            {suggestions.length === 0 ? <p style={{fontSize: 11, textAlign:'center', color: 'var(--text-muted)', marginTop: 10}}>Selecciona una línea con descripción para buscar costos.</p> :
               suggestions.map((m, i) => (
-                <div key={i} style={styles.memCard}>
-                  <div style={{fontWeight:'bold', fontSize:11, fontFamily: 'Aptos, sans-serif', marginBottom: 4, color: '#2c3e50', lineHeight: '1.2'}}>{m.description}</div>
-                  <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 6, borderBottom: '1px solid #f0f0f0', paddingBottom: 4}}>
-                      <div style={{fontSize: 10, color: '#7f8c8d', maxWidth:'55%', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}} title={m.category}>{m.category}</div>
+                <div key={i} className="editor-mem-card" style={styles.memCard}>
+                  <div style={{fontWeight:'bold', fontSize:11, fontFamily: 'Aptos, sans-serif', marginBottom: 4, color: 'var(--text-main)', lineHeight: '1.2'}}>{m.description}</div>
+                  <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 6, borderBottom: '1px solid rgba(255,255,255,0.08)', paddingBottom: 4}}>
+                      <div style={{fontSize: 10, color: 'var(--text-muted)', maxWidth:'55%', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}} title={m.category}>{m.category}</div>
                       <div style={{textAlign: 'right'}}><span style={styles.costHighlight}>{m.currency} {fmt(m.unit_cost)}</span><span style={{fontSize: 9, color: '#999', marginLeft: 3}}> / {m.unit}</span></div>
                   </div>
                   <div style={{display: 'flex', gap: 4, alignItems: 'center', flexWrap: 'wrap', marginBottom: 8}}>
@@ -753,26 +825,24 @@ const EditorScreen = ({ initialData, onBack }: { initialData: ProjectFile, onBac
                 </div>
               ))}
           </div>
-          <div style={{flexShrink: 0, borderTop: '2px solid #ddd', paddingTop: 10, background: '#f9f9f9'}}>
-             <div style={{fontWeight:'bold', fontSize:12, color: '#006673', marginBottom: 10, fontFamily: 'Aptos, sans-serif'}}>RESUMEN FINANCIERO</div>
+          <div style={{flexShrink: 0, borderTop: '1px solid rgba(255,255,255,0.12)', paddingTop: 10}}>
+             <div className="editor-summary-title" style={{fontWeight:'bold', fontSize:12, marginBottom: 10, fontFamily: 'Aptos, sans-serif'}}>RESUMEN FINANCIERO</div>
              <div style={{maxHeight: '200px', overflowY: 'auto'}}>
-               {sectionTotals.length === 0 ? <p style={{fontSize:11, color:'#999'}}>Vacío.</p> : sectionTotals.map((s, i) => (<div key={s.name + i} style={{display:'flex', justifyContent:'space-between', fontSize:11, marginBottom:5, borderBottom:'1px dashed #eee', paddingBottom:2}}><span style={{fontWeight:'bold', color:'#333', maxWidth: '60%', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis'}} title={s.name}>{s.name}</span><span>{fmt(s.total)} <span style={{fontSize:9, color:'#888'}}>({fmtPct(s.total, grandTotal)})</span></span></div>))}
+               {sectionTotals.length === 0 ? <p style={{fontSize:11, color:'var(--text-muted)'}}>Vacío.</p> : sectionTotals.map((s, i) => (<div key={s.name + i} style={{display:'flex', justifyContent:'space-between', fontSize:11, marginBottom:5, borderBottom:'1px dashed rgba(255,255,255,0.08)', paddingBottom:2}}><span style={{fontWeight:'bold', color:'var(--text-main)', maxWidth: '60%', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis'}} title={s.name}>{s.name}</span><span>{fmt(s.total)} <span style={{fontSize:9, color:'var(--text-muted)'}}>({fmtPct(s.total, grandTotal)})</span></span></div>))}
              </div>
-             <div style={{marginTop:10, paddingTop:5, borderTop:'1px solid #ccc', fontWeight:'bold', fontSize:12, textAlign:'right', color: '#006673'}}>TOTAL: {fmt(grandTotal)}</div>
+             <div style={{marginTop:10, paddingTop:5, borderTop:'1px solid rgba(255,255,255,0.12)', fontWeight:'bold', fontSize:12, textAlign:'right', color: 'var(--text-main)'}}>TOTAL: {fmt(grandTotal)}</div>
           </div>
         </div>
       </div>
       
       {/* 👇 PANTALLA DE CARGA PARA LA IA */}
       {isAiLoading && (
-        <div style={{
-          position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, 
-          background: 'rgba(255,255,255,0.8)', zIndex: 9999, 
-          display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center'
-        }}>
-          <div style={{fontSize: '40px', marginBottom: '20px'}}>🧠 🐱</div>
-          <h3 style={{color: '#006673', fontFamily: 'Aptos, sans-serif'}}>La IA está leyendo el Excel...</h3>
-          <p style={{color: '#666'}}>Esto puede tomar unos segundos mientras Ollama piensa.</p>
+        <div className="editor-overlay">
+          <div className="editor-overlay-card">
+            <div className="editor-overlay-emoji">🧠 🐱</div>
+            <h3 className="editor-overlay-title" style={{fontFamily: 'Aptos, sans-serif'}}>La IA está leyendo el Excel...</h3>
+            <p className="editor-overlay-sub">Esto puede tomar unos segundos mientras Ollama piensa.</p>
+          </div>
         </div>
       )}
 
@@ -850,7 +920,7 @@ export default function App() {
   const updateProject = (id: string, newData: any) => setProjects(prev => prev.map(p => p.id === id ? { ...p, ...newData } : p));
 
   return (
-    <div style={{fontFamily: 'Aptos, sans-serif'}}>
+    <div style={{ fontFamily: 'Aptos, sans-serif' }}>
       {screen === 'home' && <HomeScreen onNavigate={setScreen} projects={projects} onSelectProject={onSelect} />}
       {screen === 'create-project' && <CreateProjectScreen onBack={() => setScreen('home')} onStart={(m:any) => { setSelectedData({meta:m, sections:[{id: generateId(), name: 'Personal'}], lines:[]}); setScreen('editor'); }} onImportToEditor={async (_m:any) => { const r = await window.budgetAPI.importSmartBudget(); if (r?.success) { alert('✅ Importado con IA a Memoria. Ve a Gestión de Memoria para abrirlo.'); setScreen('memory-manager'); } else { alert(r?.message || 'No se pudo importar con IA.'); } }} />}
       {screen === 'editor' && selectedData && <EditorScreen initialData={selectedData} onBack={() => { load(); setScreen('home'); }} />}
@@ -878,42 +948,42 @@ const styles: any = {
   title: { fontSize: '2.5rem', color: '#4ec9b0', margin: 0, fontFamily: 'Aptos, sans-serif' },
   formContainer: { width: 400, background: '#1e1e1e', padding: 30, borderRadius: 10, color: '#fff' },
   input: { width: '100%', padding: 8, marginBottom: 15, borderRadius: 4, border: '1px solid #333', background: '#2d2d2d', color: '#fff', fontFamily: 'Aptos, sans-serif' },
-  topBar: { background: '#006673', color: '#fff', padding: '10px 20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' },
-  headerEditableInput: { background: 'rgba(0,0,0,0.2)', border: 'none', color: '#fff', padding: '5px 10px', borderRadius: 4, width: '150px', fontWeight: 'bold', fontFamily: 'Aptos, sans-serif', outline: 'none' },
-  headerSelect: { background: 'rgba(0,0,0,0.2)', border: 'none', color: '#fff', padding: '5px', borderRadius: 4, outline: 'none', cursor: 'pointer' },
-  closeBtn: { background: 'transparent', border: '1px solid #fff', color: '#fff', padding: '2px 8px', borderRadius: 4, cursor: 'pointer' },
-  footerBar: { background: '#006673', color: '#fff', padding: '15px 30px', fontWeight: 'bold', display: 'flex', justifyContent: 'center' },
+  topBar: { padding: '10px 20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' },
+  headerEditableInput: { border: 'none', padding: '5px 10px', borderRadius: 6, width: '150px', fontWeight: 'bold', fontFamily: 'Aptos, sans-serif', outline: 'none' },
+  headerSelect: { border: 'none', padding: '5px 10px', borderRadius: 6, outline: 'none', cursor: 'pointer' },
+  closeBtn: { background: 'transparent', padding: '4px 10px', borderRadius: 6, cursor: 'pointer' },
+  footerBar: { background: 'rgba(2, 6, 23, 0.8)', color: 'var(--text-main)', borderTop: '1px solid var(--glass-border)', padding: '15px 30px', fontWeight: 'bold', display: 'flex', justifyContent: 'center' },
   excelTextarea: { width: '100%', border: 'none', resize: 'none', padding: '4px 8px', fontSize: '12px', outline: 'none', background: 'transparent', overflow: 'hidden', boxSizing: 'border-box', fontFamily: 'Aptos, sans-serif' },
   gridInput: { width: '100%', border: 'none', padding: '4px', fontSize: '12px', background: 'transparent', outline: 'none', boxSizing: 'border-box' },
-  memCard: { background: '#fff', padding: 10, borderRadius: 5, marginBottom: 10, border: '1px solid #ddd', color: '#333' },
-  applyBtn: { background: '#006673', color: '#fff', border: 'none', padding: '2px 8px', borderRadius: 3, cursor: 'pointer', fontSize: 10, marginTop: 5 },
-  sectionInput: { background: 'transparent', border: 'none', fontWeight: 'bold', color: '#006673', width: '100%', outline: 'none' },
-  addSubBtn: { background: '#4ec9b0', color: '#fff', border: 'none', padding: '2px 6px', borderRadius: 4, fontSize: 10, cursor: 'pointer' },
-  exchangeRateContainer: { display: 'flex', gap: 10, fontSize: 11, background: 'rgba(0,0,0,0.1)', padding: '4px 10px', borderRadius: 4 },
-  rateInput: { width: '45px', background: 'transparent', border: 'none', borderBottom: '1px solid #fff', color: '#fff', textAlign: 'center', outline: 'none', fontFamily: 'Aptos, sans-serif' },
-  searchContainer: { background: '#fff', borderRadius: 4, padding: '2px 8px', display: 'flex', alignItems: 'center', border: '1px solid #ccc' },
-  searchInput: { background: 'transparent', border: 'none', color: '#333', fontSize: 12, outline: 'none', width: '120px', fontFamily: 'Aptos, sans-serif' },
-  snapshotBadge: { fontSize: '10px', background: '#e8f4f4', border: '1px solid #4ec9b0', borderRadius: '4px', padding: '2px 5px', cursor: 'pointer', marginRight: '5px', color: '#006673' },
+  memCard: { padding: 10, borderRadius: 8, marginBottom: 10 },
+  applyBtn: { background: 'var(--primary)', color: '#fff', border: 'none', padding: '4px 8px', borderRadius: 6, cursor: 'pointer', fontSize: 10, marginTop: 5 },
+  sectionInput: { background: 'transparent', border: 'none', fontWeight: 'bold', color: 'var(--text-main)', width: '100%', outline: 'none' },
+  addSubBtn: { background: 'var(--primary)', color: '#fff', border: 'none', padding: '2px 6px', borderRadius: 6, fontSize: 10, cursor: 'pointer' },
+  exchangeRateContainer: { display: 'flex', gap: 10, fontSize: 11, background: 'rgba(0,0,0,0.25)', padding: '4px 10px', borderRadius: 6, border: '1px solid var(--glass-border)' },
+  rateInput: { width: '45px', background: 'transparent', border: 'none', borderBottom: '1px solid rgba(255,255,255,0.4)', color: 'var(--text-main)', textAlign: 'center', outline: 'none', fontFamily: 'Aptos, sans-serif' },
+  searchContainer: { borderRadius: 6, padding: '2px 8px', display: 'flex', alignItems: 'center' },
+  searchInput: { background: 'transparent', border: 'none', color: 'var(--text-main)', fontSize: 12, outline: 'none', width: '120px', fontFamily: 'Aptos, sans-serif' },
+  snapshotBadge: { fontSize: '10px', background: 'rgba(139, 92, 246, 0.15)', border: '1px solid rgba(139, 92, 246, 0.4)', borderRadius: '6px', padding: '2px 5px', cursor: 'pointer', marginRight: '5px', color: 'var(--text-main)' },
   iconBtn: { background: 'transparent', border: 'none', fontSize: '12px', cursor: 'pointer', marginRight: '5px', padding: 0 },
-  narrativeInput: { width: '100%', border: 'none', fontSize: '10px', color: '#555', background: 'transparent', fontStyle: 'italic', outline: 'none', marginTop: '2px', paddingLeft: '8px', borderTop: '1px dotted #eee', fontFamily: 'Aptos, sans-serif' },
+  narrativeInput: { width: '100%', border: 'none', fontSize: '10px', color: 'var(--text-muted)', background: 'transparent', fontStyle: 'italic', outline: 'none', marginTop: '2px', paddingLeft: '8px', borderTop: '1px dotted rgba(255,255,255,0.2)', fontFamily: 'Aptos, sans-serif' },
   
   // ESTILOS BADGES
   tagBadge: { 
-    fontSize: '9px', padding: '1px 5px', borderRadius: '4px', 
-    background: '#f5f5f5', color: '#666', border: '1px solid #ddd',
+    fontSize: '9px', padding: '1px 6px', borderRadius: '6px', 
+    background: 'rgba(255,255,255,0.08)', color: 'var(--text-muted)', border: '1px solid var(--glass-border)',
     display: 'inline-block', fontWeight: 'bold'
   },
   sectorBadge: { 
-    fontSize: '9px', padding: '1px 5px', borderRadius: '4px', 
-    background: '#f3e5f5', color: '#7b1fa2', border: '1px solid #e1bee7',
+    fontSize: '9px', padding: '1px 6px', borderRadius: '6px', 
+    background: 'rgba(139, 92, 246, 0.15)', color: 'var(--text-main)', border: '1px solid rgba(139, 92, 246, 0.35)',
     display: 'inline-block', fontWeight: 'bold'
   },
   donorBadge: {
-    fontSize: '9px', padding: '1px 5px', borderRadius: '4px', 
-    background: '#e3f2fd', color: '#1565c0', border: '1px solid #bbdefb',
+    fontSize: '9px', padding: '1px 6px', borderRadius: '6px', 
+    background: 'rgba(14, 116, 144, 0.2)', color: 'var(--text-main)', border: '1px solid rgba(14, 116, 144, 0.35)',
     display: 'inline-block', fontWeight: 'bold'
   },
   costHighlight: {
-    color: '#006673', fontWeight: 'bold', fontSize: '12px'
+    color: 'var(--primary)', fontWeight: 'bold', fontSize: '12px'
   }
 }
