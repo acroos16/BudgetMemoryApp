@@ -456,6 +456,83 @@ app.whenReady().then(() => {
     }
   })
 
+
+// ---------------------------------------------------------
+  // HANDLER: RECUPERAR ITEMS DE MEMORIA (¡PEGA ESTO!)
+  // ---------------------------------------------------------
+  ipcMain.handle('get-memory-items', (_event, sourceId) => {
+    try {
+      // 1. Validar ID
+      if (!sourceId) return [];
+
+      // 2. Buscar en la BD
+      const rows = db.prepare(`
+        SELECT * FROM cost_memory 
+        WHERE source_project_id = ?
+      `).all(sourceId);
+
+      return rows;
+    } catch (error: any) {
+      console.error("❌ Error recuperando items:", error);
+      return [];
+    }
+  })
+
+
+  // ---------------------------------------------------------
+  // HANDLER: ELIMINAR FUENTE DE MEMORIA (Borrado Real)
+  // ---------------------------------------------------------
+  ipcMain.handle('delete-memory-source', (_event, sourceId) => {
+    try {
+      // Usamos una transacción para asegurar que se borre todo o nada
+      const transaction = db.transaction(() => {
+        // 1. Borrar el registro de la importación
+        const result = db.prepare('DELETE FROM memory_imports WHERE id = ?').run(sourceId);
+        
+        // 2. Borrar todos los items de costo asociados a esa importación
+        db.prepare('DELETE FROM cost_memory WHERE source_project_id = ?').run(sourceId);
+        
+        return result.changes > 0; // Devuelve true si borró algo
+      });
+
+      const success = transaction();
+      console.log(`🗑️ Fuente ${sourceId} eliminada: ${success}`);
+      return { success };
+
+    } catch (error: any) {
+      console.error("❌ Error eliminando fuente:", error);
+      return { success: false, message: error.message };
+    }
+  })
+
+  // ---------------------------------------------------------
+  // HANDLER: RENOMBRAR FUENTE DE MEMORIA / PROYECTO
+  // ---------------------------------------------------------
+  ipcMain.handle('rename-memory-source', (_event, payload) => {
+    const { id, newName, type } = payload || {};
+    if (!id || !newName) return { success: false, message: 'ID o nombre inválido' };
+
+    try {
+      let result;
+
+      if (type === 'app') {
+        result = db.prepare("UPDATE projects SET name = ?, updated_at = datetime('now') WHERE id = ?").run(newName, id);
+      } else {
+        result = db.prepare('UPDATE memory_imports SET name = ? WHERE id = ?').run(newName, id);
+      }
+
+      const success = result.changes > 0;
+      if (!success) return { success: false, message: 'No se encontró el registro' };
+
+      console.log(`✏️ Fuente ${id} renombrada a: ${newName}`);
+      return { success: true };
+    } catch (error: any) {
+      console.error('❌ Error renombrando fuente:', error);
+      return { success: false, message: error.message };
+    }
+  })
+
+
   app.on('activate', function () {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })

@@ -42,7 +42,9 @@ declare global {
       importToEditor: () => Promise<any>
       importSmartBudget: () => Promise<{ success: boolean; data?: any[]; message?: string }>
       // 👇 ESTA ES LA LÍNEA NUEVA QUE FALTA
-      getMemoryItems: (sourceId: string) => Promise<any[]> 
+      getMemoryItems: (sourceId: string) => Promise<any[]>
+      deleteMemorySource: (sourceId: string) => Promise<{ success: boolean; message?: string }>
+      renameMemorySource: (id: string, newName: string, type: string) => Promise<{ success: boolean; message?: string }>
     }
   }
 }
@@ -196,12 +198,15 @@ const HomeScreen = ({ onNavigate, projects, onSelectProject }: any) => (
 );
 
 // --- PANTALLA GESTOR DE MEMORIA (ACTUALIZADA: LÁPIZ = EDITAR) ---
-// Simplemente borramos 'onUpdateProject' de la lista
-const MemoryManagerScreen = ({ onBack, appProjects = [], onDeleteProject, onOpenEditor }: any) => {
+const MemoryManagerScreen = ({ onBack, appProjects = [], onDeleteProject, onOpenEditor, onUpdateProject }: any) => {
   const [importedSources, setImportedSources] = useState<MemorySource[]>([]);
   const [filterType, setFilterType] = useState<'all' | 'excel' | 'app'>('all');
   const [searchText, setSearchText] = useState('');
   const [isAiLoading, setIsAiLoading] = useState(false);
+  const [isEditing, setIsEditing] = useState(false);
+  const [editingSourceId, setEditingSourceId] = useState<string | null>(null);
+  const [editingName, setEditingName] = useState('');
+  const editingInputRef = useRef<HTMLInputElement | null>(null);
 
   const normalizeSource = (s: Partial<MemorySource>): MemorySource => ({
     id: s.id || generateId(),
@@ -217,10 +222,50 @@ const MemoryManagerScreen = ({ onBack, appProjects = [], onDeleteProject, onOpen
     try {
       const result = await window.budgetAPI.getMemorySources();
       setImportedSources(Array.isArray(result) ? result.map(r => normalizeSource(r)) : []);
+      setIsEditing(false);
+      setEditingSourceId(null);
+      setEditingName('');
     } catch (error) { console.error(error); }
   }, []);
 
   useEffect(() => { loadImportedSources(); }, [loadImportedSources]);
+  useEffect(() => { if (isEditing && editingSourceId && editingInputRef.current) editingInputRef.current.focus(); }, [editingSourceId, isEditing]);
+  useEffect(() => { 
+    // Al entrar en la pantalla, asegúrate de que no haya edición activa residual
+    setIsEditing(false);
+    setEditingSourceId(null); 
+    setEditingName(''); 
+  }, []);
+
+  const startEditingName = (source: MemorySource) => {
+    setIsEditing(true);
+    setEditingSourceId(source.id);
+    setEditingName(source.name);
+  };
+
+  const cancelEditing = () => { setIsEditing(false); setEditingSourceId(null); setEditingName(''); };
+
+  const submitRename = async (source: MemorySource) => {
+    const newName = editingName.trim();
+    if (!newName || newName === source.name) { cancelEditing(); return; }
+    try {
+      const result = await window.budgetAPI.renameMemorySource(source.id, newName, source.type);
+      if (result.success) {
+        if (source.type === 'app') {
+          onUpdateProject?.(source.id, { name: newName });
+        } else {
+          setImportedSources(prev => prev.map(s => s.id === source.id ? { ...s, name: newName } : s));
+        }
+      } else {
+        alert(result.message || 'No se pudo renombrar.');
+      }
+    } catch (error) {
+      console.error(error);
+      alert('Error al renombrar.');
+    } finally {
+      cancelEditing();
+    }
+  };
 
   const appSources: MemorySource[] = appProjects.map((p: any) => ({
       id: p.id, name: p.name || 'Sin nombre', type: 'app', date: new Date().toLocaleDateString(),
@@ -252,10 +297,27 @@ const MemoryManagerScreen = ({ onBack, appProjects = [], onDeleteProject, onOpen
       } else { alert("Descarga de importados no disponible en esta versión."); }
   };
 
-  const handleDelete = (e: React.MouseEvent, id: string, type: string) => {
+  const handleDelete = async (e: React.MouseEvent, id: string, type: string) => {
       e.stopPropagation();
-      if (window.confirm("¿Eliminar fuente?")) {
-          if (type === 'app') onDeleteProject(id); else setImportedSources(prev => prev.filter(s => s.id !== id));
+      if (window.confirm("¿Estás seguro de eliminar esta fuente permanentemente?")) {
+          if (type === 'app') {
+             // Si tienes lógica para borrar proyectos app, va aquí
+             onDeleteProject(id); 
+          } else {
+             // Lógica para borrar IMPORTACIONES (Excel/IA) de la BD
+             try {
+                const result = await window.budgetAPI.deleteMemorySource(id);
+                if (result.success) {
+                    // Si la BD dice que se borró, entonces actualizamos la pantalla
+                    setImportedSources(prev => prev.filter(s => s.id !== id));
+                } else {
+                    alert("No se pudo eliminar de la base de datos.");
+                }
+             } catch (error) {
+                console.error(error);
+                alert("Error de conexión al intentar eliminar.");
+             }
+          }
       }
   };
 
@@ -277,7 +339,25 @@ const MemoryManagerScreen = ({ onBack, appProjects = [], onDeleteProject, onOpen
                 <tbody>
                     {filteredSources.map(s => (
                         <tr key={s.id} style={{borderBottom: '1px solid rgba(255,255,255,0.1)'}}>
-                            <td style={{padding: 10, fontWeight: 'bold'}}>{s.name}</td>
+                            <td style={{padding: 10, fontWeight: 'bold'}}>
+                              {isEditing && editingSourceId === s.id ? (
+                                <input
+                                  ref={editingInputRef}
+                                  value={editingName || s.name}
+                                  onChange={(e) => setEditingName(e.target.value)}
+                                  onBlur={() => submitRename(s)}
+                                  onKeyDown={(e) => {
+                                    if (e.key === 'Enter') submitRename(s);
+                                    if (e.key === 'Escape') cancelEditing();
+                                  }}
+                                  style={{ background: 'transparent', border: '1px solid #4ec9b0', color: '#fff', width: '100%', padding: '4px', borderRadius: 4 }}
+                                />
+                              ) : (
+                                <span style={{cursor: 'text'}} onDoubleClick={() => startEditingName(s)} title="Doble clic para renombrar">
+                                  {s.name}
+                                </span>
+                              )}
+                            </td>
                             <td style={{padding: 10}}><span style={{background: s.type === 'excel' ? 'rgba(76,175,80,0.2)' : 'rgba(33,150,243,0.2)', color: s.type === 'excel' ? '#81c784' : '#64b5f6', padding: '2px 8px', borderRadius: 4, fontSize: 10}}>{s.type.toUpperCase()}</span></td>
                             <td style={{padding: 10, color: '#aaa'}}>{s.count}</td>
                             <td style={{padding: 10, color: '#aaa'}}>{s.date}</td>
@@ -312,7 +392,7 @@ const CreateProjectScreen = ({ onStart, onBack, onImportToEditor }: any) => {
         <input type="number" style={styles.input} placeholder="Meses" onChange={e => setMeta({...meta, duration: parseInt(e.target.value)})} />
       </div>
       <button className="menu-btn primary" style={{fontFamily: 'Aptos, sans-serif'}} onClick={() => onStart(meta)}>Empezar</button>
-      <button className="menu-btn secondary" style={{fontFamily: 'Aptos, sans-serif', marginTop:10}} onClick={() => onImportToEditor(meta)}>Importar Excel</button>
+      <button className="menu-btn secondary" style={{fontFamily: 'Aptos, sans-serif', marginTop:10}} onClick={() => onImportToEditor(meta)} title="Importación asistida con IA">Importar Excel (IA)</button>
       <button className="menu-btn danger" style={{fontFamily: 'Aptos, sans-serif', marginTop:10}} onClick={onBack}>Atrás</button>
     </div></div>
   )
@@ -772,7 +852,7 @@ export default function App() {
   return (
     <div style={{fontFamily: 'Aptos, sans-serif'}}>
       {screen === 'home' && <HomeScreen onNavigate={setScreen} projects={projects} onSelectProject={onSelect} />}
-      {screen === 'create-project' && <CreateProjectScreen onBack={() => setScreen('home')} onStart={(m:any) => { setSelectedData({meta:m, sections:[{id: generateId(), name: 'Personal'}], lines:[]}); setScreen('editor'); }} onImportToEditor={async (m:any) => { const d = await window.budgetAPI.importToEditor(); if(d) { setSelectedData({meta:m, ...d}); setScreen('editor'); } }} />}
+      {screen === 'create-project' && <CreateProjectScreen onBack={() => setScreen('home')} onStart={(m:any) => { setSelectedData({meta:m, sections:[{id: generateId(), name: 'Personal'}], lines:[]}); setScreen('editor'); }} onImportToEditor={async (_m:any) => { const r = await window.budgetAPI.importSmartBudget(); if (r?.success) { alert('✅ Importado con IA a Memoria. Ve a Gestión de Memoria para abrirlo.'); setScreen('memory-manager'); } else { alert(r?.message || 'No se pudo importar con IA.'); } }} />}
       {screen === 'editor' && selectedData && <EditorScreen initialData={selectedData} onBack={() => { load(); setScreen('home'); }} />}
       
       {screen === 'memory-manager' && (

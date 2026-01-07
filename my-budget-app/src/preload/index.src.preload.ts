@@ -9,6 +9,8 @@ const budgetAPI = {
   getMemorySources: () => ipcRenderer.invoke('get-memory-sources'),
 
   getMemoryItems: (sourceId: string) => ipcRenderer.invoke('get-memory-items', sourceId),
+  deleteMemorySource: (sourceId: string) => ipcRenderer.invoke('delete-memory-source', sourceId),
+  renameMemorySource: (id: string, newName: string, type: string) => ipcRenderer.invoke('rename-memory-source', { id, newName, type }),
 
   // --- 2. IMPORTADORES ---
   importToEditor: () => ipcRenderer.invoke('import-to-editor'),
