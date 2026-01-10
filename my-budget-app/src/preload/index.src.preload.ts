@@ -18,6 +18,11 @@ const budgetAPI = {
 
   // 👇 ESTO ES LO QUE TE FALTABA: LA CONEXIÓN PARA LA IA
   importSmartBudget: () => ipcRenderer.invoke('import-smart-budget'),
+  onImportProgress: (callback: (payload: { percent: number; message?: string }) => void) => {
+    const handler = (_event: any, payload: { percent: number; message?: string }) => callback(payload);
+    ipcRenderer.on('import-progress', handler);
+    return () => ipcRenderer.removeListener('import-progress', handler);
+  },
 
   // --- 3. FUNCIONES LEGACY ---
   addCost: (item: any) => ipcRenderer.invoke('add-cost', item),

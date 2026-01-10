@@ -28,6 +28,12 @@ db.exec(`
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     description TEXT,
     category TEXT,
+    section TEXT,
+    level INTEGER,
+    parent_code TEXT,
+    code TEXT,
+    quantity REAL,
+    frequency REAL,
     unit TEXT,
     unit_cost REAL,
     currency TEXT,
@@ -42,9 +48,32 @@ db.exec(`
     name TEXT,
     rows_imported INTEGER DEFAULT 0,
     imported_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    tags TEXT
+    tags TEXT,
+    meta_json TEXT
   );
 `)
+
+try {
+  db.exec('ALTER TABLE memory_imports ADD COLUMN meta_json TEXT');
+} catch {}
+try {
+  db.exec('ALTER TABLE cost_memory ADD COLUMN section TEXT');
+} catch {}
+try {
+  db.exec('ALTER TABLE cost_memory ADD COLUMN level INTEGER');
+} catch {}
+try {
+  db.exec('ALTER TABLE cost_memory ADD COLUMN parent_code TEXT');
+} catch {}
+try {
+  db.exec('ALTER TABLE cost_memory ADD COLUMN code TEXT');
+} catch {}
+try {
+  db.exec('ALTER TABLE cost_memory ADD COLUMN quantity REAL');
+} catch {}
+try {
+  db.exec('ALTER TABLE cost_memory ADD COLUMN frequency REAL');
+} catch {}
 
 // ---------------------------------------------------------
 // 2. FUNCIONES AUXILIARES
@@ -69,6 +98,309 @@ function guessCategory(text: string): string {
   if (t.includes('taller') || t.includes('reunion') || t.includes('evento') || t.includes('coffee') || t.includes('catering') || t.includes('sala') || t.includes('capacitacion')) return 'Talleres/Eventos';
   if (t.includes('alquiler') || t.includes('rent') || t.includes('luz') || t.includes('agua') || t.includes('mantenimiento')) return 'Operaciones/Oficina';
   return 'General';
+}
+
+function sendImportProgress(event: Electron.IpcMainInvokeEvent, percent: number, message?: string) {
+  event.sender.send('import-progress', { percent, message });
+}
+
+function normalizeHeader(value: any): string {
+  return String(value || '').toLowerCase().trim().replace(/\s+/g, ' ');
+}
+
+function parseNumber(value: any): number {
+  if (typeof value === 'number') return value;
+  const raw = String(value || '').trim();
+  if (!raw) return NaN;
+  let s = raw.replace(/\s+/g, '');
+  if (s.includes(',') && s.includes('.')) {
+    s = s.lastIndexOf(',') > s.lastIndexOf('.') ? s.replace(/\./g, '').replace(',', '.') : s.replace(/,/g, '');
+  } else if (s.includes(',') && !s.includes('.')) {
+    s = s.replace(/\./g, '').replace(',', '.');
+  } else {
+    s = s.replace(/,/g, '');
+  }
+  s = s.replace(/[^0-9.-]/g, '');
+  return parseFloat(s);
+}
+
+function isMetaDescriptor(text: string): boolean {
+  const t = text.toLowerCase().trim();
+  return (
+    /^proyecto(\s*:|$)/.test(t) ||
+    /^donante(\s*:|$)/.test(t) ||
+    /^duraci[oó]n(\s*:|$)/.test(t) ||
+    /^monto(\s*:|$)/.test(t) ||
+    /^t\/c(\s*:|$)/.test(t) ||
+    /^tipo de cambio(\s*:|$)/.test(t)
+  );
+}
+
+function extractProjectMeta(rawData: any[][]) {
+  const headerInfo = findHeaderRow(rawData);
+  const limit = headerInfo ? headerInfo.index : Math.min(25, rawData.length);
+  let projectName = '';
+  let donor = '';
+  let duration: number | undefined;
+  let currency = '';
+
+  for (let i = 0; i < limit; i++) {
+    const row = rawData[i] || [];
+    for (let j = 0; j < row.length; j++) {
+      const cellRaw = row[j];
+      const cell = String(cellRaw || '').trim();
+      if (!cell) continue;
+      const lower = cell.toLowerCase();
+      const next = row[j + 1];
+
+      const extractValue = () => {
+        const parts = cell.split(':');
+        const after = parts.length > 1 ? parts.slice(1).join(':').trim() : '';
+        if (after) return after;
+        return String(next || '').trim();
+      };
+
+      if (!projectName && lower.includes('proyecto')) {
+        projectName = extractValue();
+      }
+      if (!donor && lower.includes('donante')) {
+        donor = extractValue();
+      }
+      if (!currency && lower.includes('moneda')) {
+        currency = extractValue();
+      }
+      if (duration === undefined && (lower.includes('duracion') || lower.includes('duración'))) {
+        const value = extractValue() || cell;
+        const parsed = parseNumber(value);
+        if (Number.isFinite(parsed)) duration = parsed;
+      }
+      if (duration === undefined && lower.includes('mes')) {
+        const parsed = parseNumber(cell);
+        if (Number.isFinite(parsed)) duration = parsed;
+      }
+    }
+  }
+
+  return {
+    projectName: projectName || undefined,
+    donor: donor || undefined,
+    duration,
+    currency: currency || undefined
+  };
+}
+
+function findHeaderRow(rawData: any[][]) {
+  const descKeywords = ['descrip', 'descripción', 'descripcion', 'detalle', 'concepto', 'actividad', 'rubro'];
+  const costKeywords = ['total', 'monto', 'importe', 'unitario', 'costo'];
+  const limit = Math.min(60, rawData.length);
+  for (let i = 0; i < limit; i++) {
+    const headers = (rawData[i] || []).map(normalizeHeader);
+    const rowStr = headers.join(' ');
+    if (descKeywords.some(k => rowStr.includes(k)) && costKeywords.some(k => rowStr.includes(k))) {
+      return { index: i, headers };
+    }
+  }
+  return null;
+}
+
+function parseBudgetItems(rawData: any[][], formulaMap?: Record<string, string>) {
+  const headerInfo = findHeaderRow(rawData);
+  if (!headerInfo) return [];
+
+  const headers = headerInfo.headers;
+  const findIndex = (keywords: string[]) => headers.findIndex(h => keywords.some(k => h.includes(k)));
+  const getNumberNear = (row: any[], idx: number) => {
+    for (let offset = 0; offset <= 2; offset++) {
+      const pos = idx + offset;
+      if (pos >= 0 && pos < row.length) {
+        const parsed = parseNumber(row[pos]);
+        if (Number.isFinite(parsed)) return parsed;
+      }
+    }
+    return NaN;
+  };
+  const idxDesc = findIndex(['descrip', 'descripción', 'descripcion', 'detalle', 'concepto', 'actividad', 'rubro']);
+  if (idxDesc === -1) return [];
+
+  const idxUnit = findIndex(['unidad', 'u.m', 'um', 'unit']);
+  const idxQty = findIndex(['cantidad', 'cant', 'qty', 'numero']);
+  const idxFreq = findIndex(['frecuencia', 'freq']);
+  const idxCode = findIndex(['cod', 'código', 'codigo', 'code']);
+  const idxGroup = findIndex(['rubro', 'rubros', 'rubro general', 'rubros generales']);
+  const idxUnitCost = findIndex(['p/unitario', 'p unitario', 'unitario', 'precio unit', 'costo unit', 'tarifa']);
+  const idxTotal = findIndex(['total', 'monto', 'importe', 'costo total']);
+
+  let currentSection = '';
+  let currentLineCode = '';
+  let currentSubCode = '';
+  let currentHeaderCode = '';
+  let autoLineId = 0;
+  let lastHeaderWasLine = false;
+  const items: any[] = [];
+  const rowToIndex = new Map<number, number>();
+
+  const getFormulaRangeRows = (rowIdx: number) => {
+    if (!formulaMap || idxTotal < 0) return [];
+    const colLetter = String.fromCharCode(65 + idxTotal);
+    const key = `${colLetter}${rowIdx + 1}`;
+    const formula = formulaMap[key];
+    if (!formula) return [];
+    const match = formula.match(/([A-Z]+)(\d+):([A-Z]+)(\d+)/i);
+    if (!match) return [];
+    const startRow = parseInt(match[2], 10);
+    const endRow = parseInt(match[4], 10);
+    if (!Number.isFinite(startRow) || !Number.isFinite(endRow)) return [];
+    const rows: number[] = [];
+    for (let r = Math.min(startRow, endRow); r <= Math.max(startRow, endRow); r++) {
+      rows.push(r - 1);
+    }
+    return rows;
+  };
+
+  for (let i = headerInfo.index + 1; i < rawData.length; i++) {
+    const row = rawData[i] || [];
+    const desc = String(row[idxDesc] || '').trim();
+    if (!desc) continue;
+
+    const descLower = desc.toLowerCase();
+    const codeRaw = idxCode >= 0 ? String(row[idxCode] || '').trim() : '';
+    const normalizedCode = codeRaw.replace(/[^\d.]/g, '').replace(/^\./, '').replace(/\.$/, '');
+    const codeParts = normalizedCode ? normalizedCode.split('.').filter(Boolean).map(p => parseInt(p, 10)) : [];
+    const codeIsSection = codeParts.length === 1;
+    const codeIsItem = codeParts.length >= 2;
+    const groupRaw = idxGroup >= 0 ? String(row[idxGroup] || '').trim() : '';
+    const groupName = groupRaw
+      ? groupRaw.replace(/^\d+[\.\)]\s*/g, '').trim()
+      : '';
+    const unit = idxUnit >= 0 ? String(row[idxUnit] || '').trim() : '';
+    const quantityRaw = idxQty >= 0 ? row[idxQty] : null;
+    const freqRaw = idxFreq >= 0 ? row[idxFreq] : null;
+    const quantity = parseNumber(quantityRaw);
+    let frequency = parseNumber(freqRaw);
+    const freqStr = String(freqRaw || '');
+    if (freqStr.includes('%') && Number.isFinite(frequency)) frequency = frequency / 100;
+    if (typeof freqRaw === 'number' && Number.isFinite(frequency) && frequency > 1 && frequency <= 100) frequency = frequency / 100;
+    const total = idxTotal >= 0 ? getNumberNear(row, idxTotal) : NaN;
+    let unitCost = idxUnitCost >= 0 ? getNumberNear(row, idxUnitCost) : NaN;
+    const rowHasNumbers = (Number.isFinite(unitCost) && unitCost > 0) || (Number.isFinite(total) && total > 0);
+    const rowHasDetails = codeIsItem || unit !== '' || Number.isFinite(quantity) || Number.isFinite(frequency);
+
+    const hasUnitOrQty = unit !== '' || Number.isFinite(quantity) || Number.isFinite(frequency);
+    const isSubtotal = descLower.includes('subtotal') || descLower.includes('total');
+    const descIsNumberedSection = /^\d+\s+/.test(desc);
+    const looksLikeSection = codeIsSection || (!codeRaw && !rowHasNumbers && desc.length > 2);
+    if ((descIsNumberedSection && rowHasNumbers && !hasUnitOrQty) || (looksLikeSection && !isSubtotal)) {
+      currentSection = desc.replace(/^\d+\s+/, '').trim();
+      currentHeaderCode = '';
+      lastHeaderWasLine = false;
+      currentLineCode = '';
+      currentSubCode = '';
+      continue;
+    }
+    if (isSubtotal && !rowHasNumbers) continue;
+
+    if (!Number.isFinite(unitCost) || unitCost <= 0) {
+      if (Number.isFinite(total) && total > 0) {
+        unitCost = Number.isFinite(quantity) && quantity > 0 ? total / quantity : total;
+      }
+    }
+    if (!Number.isFinite(unitCost) || unitCost <= 0) continue;
+
+    const sectionName = currentSection || groupName || guessCategory(desc);
+    let level = codeParts.length || 0;
+    let code = normalizedCode || '';
+    let parentCode = '';
+
+    if (level === 0) {
+      if (rowHasNumbers && !hasUnitOrQty) {
+        level = currentHeaderCode ? 3 : 2;
+        parentCode = currentHeaderCode || '';
+        code = `auto-${++autoLineId}`;
+        if (level === 2) {
+          currentLineCode = code;
+        } else {
+          currentSubCode = code;
+        }
+        currentHeaderCode = code;
+        lastHeaderWasLine = true;
+      } else if (rowHasNumbers && hasUnitOrQty) {
+        if (currentHeaderCode) {
+          level = 3;
+          parentCode = currentHeaderCode;
+        } else if (currentSubCode) {
+          level = 4;
+          parentCode = currentSubCode;
+        } else if (lastHeaderWasLine && currentLineCode) {
+          level = 3;
+          parentCode = currentLineCode;
+        } else {
+          level = 2;
+          code = `auto-${++autoLineId}`;
+          currentLineCode = code;
+          currentSubCode = '';
+          currentHeaderCode = code;
+        }
+        lastHeaderWasLine = false;
+      } else {
+        continue;
+      }
+    } else if (level === 1) {
+      currentSection = desc;
+      lastHeaderWasLine = false;
+      currentHeaderCode = '';
+      continue;
+    } else if (level >= 2) {
+      if (level === 2) {
+        currentLineCode = code;
+        currentSubCode = '';
+        currentHeaderCode = code;
+        lastHeaderWasLine = false;
+      } else {
+        parentCode = codeParts.slice(0, -1).join('.');
+        if (level === 3) currentSubCode = code;
+        lastHeaderWasLine = false;
+      }
+    }
+
+    const item = {
+      description: desc,
+      category: sectionName,
+      section: sectionName,
+      unit: unit || 'Und',
+      quantity: Number.isFinite(quantity) ? quantity : undefined,
+      frequency: Number.isFinite(frequency) ? frequency : undefined,
+      unit_cost: unitCost,
+      total: Number.isFinite(total) ? total : undefined,
+      level,
+      code: code || undefined,
+      parent_code: parentCode || undefined,
+      rowIndex: i
+    };
+    items.push(item);
+    rowToIndex.set(i, items.length - 1);
+  }
+
+  if (formulaMap) {
+    for (const item of items) {
+      if (!item || item.rowIndex === undefined) continue;
+      const formulaRows = getFormulaRangeRows(item.rowIndex);
+      if (formulaRows.length === 0) continue;
+      const parentCode = item.code || `auto-parent-${item.rowIndex + 1}`;
+      item.code = parentCode;
+      item.level = 2;
+      formulaRows.forEach(r => {
+        const idx = rowToIndex.get(r);
+        if (idx === undefined) return;
+        const child = items[idx];
+        if (!child || child.section !== item.section) return;
+        if (child.level && child.level <= item.level) return;
+        child.parent_code = parentCode;
+        child.level = 3;
+      });
+    }
+  }
+
+  return items.map(({ rowIndex, ...rest }) => rest);
 }
 
 // ---------------------------------------------------------
@@ -126,8 +458,8 @@ app.whenReady().then(() => {
 
         db.prepare('DELETE FROM cost_memory WHERE source_project_id = ?').run(id)
         const stmtMemory = db.prepare(`
-          INSERT INTO cost_memory (description, category, unit, unit_cost, currency, year, sector, donor, source_project_id)
-          VALUES (@description, @category, @unit, @unit_cost, @currency, @year, @sector, @donor, @source_project_id)
+          INSERT INTO cost_memory (description, category, unit, unit_cost, quantity, frequency, currency, year, sector, donor, source_project_id)
+          VALUES (@description, @category, @unit, @unit_cost, @quantity, @frequency, @currency, @year, @sector, @donor, @source_project_id)
         `)
 
         const parsedData = JSON.parse(data_json)
@@ -141,6 +473,8 @@ app.whenReady().then(() => {
               category: line.category || 'General',
               unit: line.unit || 'Und',
               unit_cost: line.unit_cost,
+              quantity: line.quantity || 1,
+              frequency: line.frequency || 1,
               currency: meta.currency || 'PEN',
               year: new Date().getFullYear(),
               sector: meta.sector || '',
@@ -266,7 +600,7 @@ app.whenReady().then(() => {
 // ---------------------------------------------------------
   // HANDLER: IMPORTAR INTELIGENTE (IA) 🧠 -> A MEMORIA
   // ---------------------------------------------------------
-  ipcMain.handle('import-smart-budget', async () => {
+  ipcMain.handle('import-smart-budget', async (event) => {
     // 1. Abrir selector de archivos
     const { canceled, filePaths } = await dialog.showOpenDialog({
       properties: ['openFile'],
@@ -276,44 +610,94 @@ app.whenReady().then(() => {
     if (canceled || !filePaths[0]) return { success: false, message: 'Cancelado' }
 
     try {
+      sendImportProgress(event, 5, 'Abriendo archivo');
       const fileName = basename(filePaths[0])
       
       // 2. Leer Excel
       const workbook = XLSX.readFile(filePaths[0])
       const sheet = workbook.Sheets[workbook.SheetNames[0]]
-      const rawData = XLSX.utils.sheet_to_json(sheet, { header: 1 })
+      const rawData = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' }) as any[][]
+      sendImportProgress(event, 20, 'Leyendo encabezados');
+      const metaFromSheet = extractProjectMeta(rawData);
+      const formulaMap: Record<string, string> = {};
+      Object.keys(sheet).forEach((addr) => {
+        const cell: any = (sheet as any)[addr];
+        if (cell && typeof cell.f === 'string') {
+          formulaMap[addr] = String(cell.f);
+        }
+      });
       
-      // Tomamos una muestra de 50 filas para no saturar a la IA
-      const cleanData = rawData.filter((r: any) => r.length > 0).slice(0, 50);
+      // 3. 🧩 Intento determinista primero (mejor para tablas largas)
+      sendImportProgress(event, 35, 'Detectando estructura');
+      let itemsToImport = parseBudgetItems(rawData, formulaMap);
+      let importTags = ['Excel', 'Parser'];
+      let importLabel = '(Auto)';
 
-      // 3. 🤖 Llamada a la IA (Tu servicio nuevo)
-      // Esperamos que analyzeBudgetRows devuelva un array de objetos:
-      // [{ description: "...", category: "...", unit: "...", unit_cost: 100, ... }]
-      const aiResult = await analyzeBudgetRows(cleanData); 
+      // 4. 🤖 Fallback a IA si no se pudo detectar nada
+      if (!itemsToImport || itemsToImport.length === 0) {
+        const headerInfo = findHeaderRow(rawData);
+        let aiInput: any[] = [];
+        if (headerInfo) {
+          const headers = headerInfo.headers;
+          const rows = rawData.slice(headerInfo.index + 1, headerInfo.index + 1 + 200);
+          aiInput = rows.map(r => {
+            const obj: Record<string, any> = {};
+            headers.forEach((h, idx) => { if (h) obj[h] = r[idx]; });
+            return obj;
+          });
+        } else {
+          aiInput = rawData.filter((r: any) => r.length > 0).slice(0, 200);
+        }
 
-      if (!aiResult || aiResult.length === 0) {
-        throw new Error("La IA no encontró items válidos.");
+        // Esperamos que analyzeBudgetRows devuelva un array de objetos:
+        // [{ description: "...", category: "...", unit: "...", unit_cost: 100, ... }]
+        sendImportProgress(event, 55, 'Analizando con IA');
+        itemsToImport = await analyzeBudgetRows(aiInput);
+        importTags = ['Excel', 'AI', 'Llama3'];
+        importLabel = '(IA)';
+      }
+
+      if (!itemsToImport || itemsToImport.length === 0) {
+        throw new Error("No se encontraron items válidos para importar.");
+      }
+
+      sendImportProgress(event, 75, 'Filtrando filas');
+      itemsToImport = itemsToImport.filter((item: any) => {
+        const desc = String(item.description || '').trim();
+        if (!desc) return false;
+        return !isMetaDescriptor(desc);
+      });
+      if (itemsToImport.length === 0) {
+        throw new Error("No se encontraron items válidos para importar.");
       }
 
       // 4. Guardar en Base de Datos (SQLite)
+      sendImportProgress(event, 85, 'Guardando en memoria');
       const importId = `ai-${Date.now()}` // ID único para esta importación
       
       const stmt = db.prepare(`
-        INSERT INTO cost_memory (description, category, unit, unit_cost, currency, year, donor, source_project_id)
-        VALUES (@description, @category, @unit, @unit_cost, 'PEN', @year, 'Importado IA', @source_project_id)
+        INSERT INTO cost_memory (description, category, section, level, parent_code, code, unit, unit_cost, quantity, frequency, currency, year, donor, source_project_id)
+        VALUES (@description, @category, @section, @level, @parent_code, @code, @unit, @unit_cost, @quantity, @frequency, 'PEN', @year, 'Importado IA', @source_project_id)
       `)
 
       const transaction = db.transaction(() => {
         let inserted = 0
         
-        aiResult.forEach((item: any) => {
+        itemsToImport.forEach((item: any) => {
           // Validamos que tenga descripción y costo
           if (item.description && (item.unit_cost > 0 || item.total > 0)) {
+            const sectionName = item.section || item.category || guessCategory(item.description);
             stmt.run({
               description: item.description,
-              category: item.category || 'General', // La IA ya nos dio la categoría
+              category: item.category || sectionName,
+              section: sectionName,
+              level: Number.isFinite(item.level) ? item.level : 2,
+              parent_code: item.parent_code || null,
+              code: item.code || null,
               unit: item.unit || 'Und',
               unit_cost: item.unit_cost || item.total, // Usamos lo que haya encontrado
+              quantity: Number.isFinite(item.quantity) ? item.quantity : 1,
+              frequency: Number.isFinite(item.frequency) ? item.frequency : 1,
               year: new Date().getFullYear(),
               source_project_id: importId
             })
@@ -327,24 +711,32 @@ app.whenReady().then(() => {
           VALUES (@id, @name, @rows_imported, datetime('now'), @tags)
         `).run({
           id: importId,
-          name: `(IA) ${fileName}`, // Le ponemos (IA) al nombre para que lo distingas
+          name: metaFromSheet.projectName || metaFromSheet.donor || `${importLabel} ${fileName}`,
           rows_imported: inserted,
-          tags: JSON.stringify(['Excel', 'AI', 'Llama3'])
+          tags: JSON.stringify(importTags),
+          meta_json: JSON.stringify({
+            projectName: metaFromSheet.projectName,
+            donor: metaFromSheet.donor,
+            duration: metaFromSheet.duration,
+            currency: metaFromSheet.currency
+          })
         })
       })
 
       transaction() // Ejecuta la transacción
 
+      sendImportProgress(event, 100, 'Importación completa');
       return { success: true, message: `IA procesó e importó correctamente.` }
 
     } catch (error: any) {
       console.error("Error en Importación IA:", error)
+      try { sendImportProgress(event, 100, 'Error en importación'); } catch {}
       return { success: false, message: error.message }
     }
   })
 
   // HANDLER: IMPORTAR A MEMORIA
-  ipcMain.handle('import-excel', async () => {
+  ipcMain.handle('import-excel', async (event) => {
     const { canceled, filePaths } = await dialog.showOpenDialog({
       properties: ['openFile'],
       filters: [{ name: 'Excel', extensions: ['xlsx', 'xls'] }]
@@ -353,9 +745,11 @@ app.whenReady().then(() => {
     if (canceled || !filePaths[0]) return { success: false, message: 'Cancelado' }
 
     try {
+      sendImportProgress(event, 5, 'Abriendo archivo');
       const workbook = XLSX.readFile(filePaths[0])
       const sheet = workbook.Sheets[workbook.SheetNames[0]]
       const rawData = XLSX.utils.sheet_to_json(sheet, { header: 1 }) as any[][]
+      sendImportProgress(event, 20, 'Detectando encabezados');
 
       let exchangeRate = 0;
       const rateRow = rawData.find(row => JSON.stringify(row).toLowerCase().includes('tipo de cambio'));
@@ -377,7 +771,10 @@ app.whenReady().then(() => {
         }
       }
 
-      if (headerRow === -1) return { success: false, message: 'No se encontraron encabezados válidos' }
+      if (headerRow === -1) {
+        try { sendImportProgress(event, 100, 'No se encontraron encabezados válidos'); } catch {}
+        return { success: false, message: 'No se encontraron encabezados válidos' }
+      }
 
       const importId = `excel-${Date.now()}`
       const fileName = basename(filePaths[0])
@@ -387,8 +784,8 @@ app.whenReady().then(() => {
       const idxUnit = headers.findIndex(h => h.includes('unidad') || h.includes('unit'))
 
       const stmt = db.prepare(`
-        INSERT INTO cost_memory (description, category, unit, unit_cost, currency, year, donor, source_project_id)
-        VALUES (@description, @category, @unit, @unit_cost, 'PEN', @year, 'Importado', @source_project_id)
+        INSERT INTO cost_memory (description, category, section, level, parent_code, code, unit, unit_cost, quantity, frequency, currency, year, donor, source_project_id)
+        VALUES (@description, @category, @section, @level, @parent_code, @code, @unit, @unit_cost, @quantity, @frequency, 'PEN', @year, 'Importado', @source_project_id)
       `)
 
       const transaction = db.transaction(() => {
@@ -402,11 +799,18 @@ app.whenReady().then(() => {
           let cost = typeof rawCost === 'number' ? rawCost : parseFloat(String(rawCost).replace(/[^0-9.-]+/g, ''))
 
           if (desc.length > 2 && cost > 0) {
+            const sectionName = guessCategory(desc);
             stmt.run({
               description: desc,
-              category: guessCategory(desc),
+              category: sectionName,
+              section: sectionName,
+              level: 2,
+              parent_code: null,
+              code: null,
               unit: idxUnit > -1 ? String(row[idxUnit]) : 'Und',
               unit_cost: cost,
+              quantity: 1,
+              frequency: 1,
               year: new Date().getFullYear(),
               source_project_id: importId
             })
@@ -425,7 +829,9 @@ app.whenReady().then(() => {
         })
       })
 
+      sendImportProgress(event, 85, 'Guardando en memoria');
       transaction()
+      sendImportProgress(event, 100, 'Importación completa');
       return { 
         success: true, 
         message: `Importado con T/C estimada: ${exchangeRate}`, 
@@ -434,6 +840,7 @@ app.whenReady().then(() => {
 
     } catch (error: any) {
       console.error(error)
+      try { sendImportProgress(event, 100, 'Error en importación'); } catch {}
       return { success: false, message: error.message }
     }
   })
@@ -441,14 +848,15 @@ app.whenReady().then(() => {
   // HANDLER: LISTAR IMPORTACIONES DE MEMORIA
   ipcMain.handle('get-memory-sources', () => {
     try {
-      const rows = db.prepare('SELECT id, name, rows_imported, imported_at, tags FROM memory_imports ORDER BY datetime(imported_at) DESC').all()
+      const rows = db.prepare('SELECT id, name, rows_imported, imported_at, tags, meta_json FROM memory_imports ORDER BY datetime(imported_at) DESC').all()
       return rows.map((r: any) => ({
         id: r.id,
         name: r.name || 'Importación Excel',
         type: 'excel',
         date: r.imported_at || new Date().toISOString(),
         tags: (() => { try { return r.tags ? JSON.parse(r.tags) : ['Excel'] } catch { return ['Excel'] } })(),
-        count: r.rows_imported || 0
+        count: r.rows_imported || 0,
+        meta: (() => { try { return r.meta_json ? JSON.parse(r.meta_json) : undefined } catch { return undefined } })()
       }))
     } catch (error) {
       console.error(error)
@@ -469,6 +877,7 @@ app.whenReady().then(() => {
       const rows = db.prepare(`
         SELECT * FROM cost_memory 
         WHERE source_project_id = ?
+        ORDER BY id ASC
       `).all(sourceId);
 
       return rows;

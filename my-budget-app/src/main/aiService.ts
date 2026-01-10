@@ -4,18 +4,23 @@ const OLLAMA_URL = "http://localhost:11434/api/chat";
 const MODEL_NAME = "llama3.2"; 
 
 const BUDGETCAT_CATEGORIES = [
-  "Personnel", "Equipment", "Travel", "External Services", 
-  "Office Costs", "Other Direct Costs"
+  "Personal",
+  "Equipos",
+  "Viajes",
+  "Servicios Externos",
+  "Costos de Oficina",
+  "Otros Costos Directos"
 ];
 
 export async function analyzeBudgetRows(rows: any[]) {
   const dataString = JSON.stringify(rows);
   const prompt = `
-    Analiza los siguientes datos crudos de un presupuesto (array de arrays).
+    Analiza los siguientes datos crudos de un presupuesto (array de arrays u objetos).
     Tus tareas:
-    1. Detecta filas que sean ITEMS DE COSTO (ignora cabeceras vacías o títulos).
+    1. Detecta filas que sean ITEMS DE COSTO (ignora cabeceras, títulos, subtotales y totales).
     2. Extrae: Descripción, Categoría, Unidad, Cantidad, Costo Unitario y Total.
-    3. Asigna la categoría más apropiada de esta lista: ${BUDGETCAT_CATEGORIES.join(", ")}.
+    3. Si hay filas de sección (p. ej. "Personal", "Actividades", etc.), úsala como categoría para los ítems debajo.
+    4. Asigna la categoría más apropiada de esta lista: ${BUDGETCAT_CATEGORIES.join(", ")}.
     
     Datos: ${dataString}
 

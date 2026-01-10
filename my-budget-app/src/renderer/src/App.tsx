@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react'
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import bgImage from './assets/background.jpg.png'
 import ExcelJS from 'exceljs'
 import { saveAs } from 'file-saver'
@@ -28,6 +28,7 @@ interface Snapshot { timestamp: string; data: string; }
 // --- INTERFAZ MEMORIA ---
 interface MemorySource {
   id: string; name: string; type: 'excel' | 'app'; date: string; tags: string[]; count: number; originalData?: any;
+  meta?: Partial<ProjectMetadata> & { projectName?: string };
 }
 
 declare global {
@@ -45,6 +46,7 @@ declare global {
       getMemoryItems: (sourceId: string) => Promise<any[]>
       deleteMemorySource: (sourceId: string) => Promise<{ success: boolean; message?: string }>
       renameMemorySource: (id: string, newName: string, type: string) => Promise<{ success: boolean; message?: string }>
+      onImportProgress: (callback: (payload: { percent: number; message?: string }) => void) => () => void
     }
   }
 }
@@ -54,6 +56,66 @@ const fmt = (num: number) => new Intl.NumberFormat('en-US', { minimumFractionDig
 const fmtPct = (part: number, total: number) => {
   if (!total || total === 0) return '0.0%';
   return ((part / total) * 100).toFixed(1) + '%';
+};
+
+const normalizeNumberToken = (token: string): string => {
+  let t = token;
+  if (t.includes(',') && t.includes('.')) {
+    t = t.lastIndexOf(',') > t.lastIndexOf('.')
+      ? t.replace(/\./g, '').replace(',', '.')
+      : t.replace(/,/g, '');
+  } else if (t.includes(',') && !t.includes('.')) {
+    t = t.replace(/,/g, '.');
+  }
+  return t;
+};
+
+const parseNumericInput = (raw: string): number => {
+  if (!raw) return NaN;
+  let expr = raw.trim();
+  if (expr.startsWith('=')) expr = expr.slice(1);
+  if (!/^[0-9+\-*/().,%\s]+$/.test(expr)) return NaN;
+  expr = expr.replace(/(\d[\d.,]*)(%?)/g, (_m, num, pct) => {
+    const normalized = normalizeNumberToken(num);
+    return pct ? `(${normalized}/100)` : normalized;
+  });
+  try {
+    // eslint-disable-next-line no-new-func
+    const result = Function(`"use strict"; return (${expr});`)();
+    return Number.isFinite(result) ? result : NaN;
+  } catch {
+    return NaN;
+  }
+};
+
+const NumericCellInput = ({ id, value, onCommit, onFocus, onKeyDown, onPaste, style, disabled }: any) => {
+  const [draft, setDraft] = useState(String(value ?? ''));
+  useEffect(() => { setDraft(String(value ?? '')); }, [value]);
+  const commit = () => {
+    const parsed = parseNumericInput(draft);
+    if (Number.isFinite(parsed)) {
+      onCommit(parsed);
+    }
+  };
+  return (
+    <input
+      id={id}
+      type="text"
+      value={draft}
+      onChange={(e) => {
+        const next = e.target.value;
+        setDraft(next);
+        const parsed = parseNumericInput(next);
+        if (Number.isFinite(parsed)) onCommit(parsed);
+      }}
+      onBlur={commit}
+      disabled={disabled}
+      onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); commit(); } onKeyDown?.(e); }}
+      onFocus={onFocus}
+      onPaste={onPaste}
+      style={style}
+    />
+  );
 };
 
 // --- FUNCIÓN DE EXPORTACIÓN A EXCEL (REUTILIZABLE) ---
@@ -101,12 +163,14 @@ const generateBudgetExcel = async (project: ProjectMetadata, sections: BudgetSec
     
     currentRowIndex++;
     const startRow = currentRowIndex; 
-    const sectionLines = lines.filter(l => l.sectionId === section.id && !l.parentId);
+  const sectionLines = lines.filter(l => l.sectionId === section.id && !l.parentId);
+  const getChildren = (parentId: string) => lines.filter(l => l.parentId === parentId);
 
-    const writeLineRow = (line: BudgetLine, indent: boolean) => {
+  const writeLineRow = (line: BudgetLine, depth: number) => {
         const row = worksheet.getRow(currentRowIndex);
         row.getCell(1).value = line.category;
-        row.getCell(2).value = indent ? `   ↳ ${line.description}` : line.description;
+        const prefix = depth > 1 ? `${'   '.repeat(depth - 1)}↳ ` : '';
+        row.getCell(2).value = `${prefix}${line.description}`;
         row.getCell(3).value = line.notes || '';
         row.getCell(4).value = line.quantity; 
         row.getCell(5).value = line.unit;
@@ -114,7 +178,7 @@ const generateBudgetExcel = async (project: ProjectMetadata, sections: BudgetSec
         row.getCell(7).value = line.unit_cost; 
         row.getCell(8).value = { formula: `D${currentRowIndex}*F${currentRowIndex}*G${currentRowIndex}`, result: line.total };
 
-        if (indent) {
+        if (depth > 1) {
             row.font = { color: { argb: '555555' }, size: 9 };
             row.getCell(2).font = { italic: true, color: { argb: '555555' } };
         }
@@ -124,10 +188,14 @@ const generateBudgetExcel = async (project: ProjectMetadata, sections: BudgetSec
         currentRowIndex++;
     };
 
-    sectionLines.forEach(mainLine => {
-      writeLineRow(mainLine, false);
-      lines.filter(l => l.parentId === mainLine.id).forEach(sub => writeLineRow(sub, true));
-    });
+    const writeLineTree = (line: BudgetLine, depth: number) => {
+      writeLineRow(line, depth);
+      getChildren(line.id).forEach(child => {
+        if (depth < 3) writeLineTree(child, depth + 1);
+      });
+    };
+
+    sectionLines.forEach(mainLine => writeLineTree(mainLine, 1));
 
     const endRow = currentRowIndex - 1; 
     const sectionFormula = startRow <= endRow ? `SUM(H${startRow}:H${endRow})` : '0';
@@ -156,18 +224,19 @@ const generateBudgetExcel = async (project: ProjectMetadata, sections: BudgetSec
 };
 
 // --- COMPONENTE AUTO-HEIGHT ---
-const AutoExpandingTextarea = ({ value, onChange, isSubline = false, id, onKeyDown, onPaste, ...props }: any) => {
+const AutoExpandingTextarea = ({ value, onChange, isSubline = false, indentLevel = 0, id, onKeyDown, onPaste, ...props }: any) => {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const adjustHeight = () => {
     const node = textareaRef.current;
     if (node) { node.style.height = '0px'; node.style.height = `${node.scrollHeight}px`; }
   };
   useEffect(() => { const timer = setTimeout(adjustHeight, 0); return () => clearTimeout(timer); }, [value]);
+  const indent = indentLevel > 0 ? indentLevel : (isSubline ? 1 : 0);
   return (
     <textarea
       id={id} ref={textareaRef} value={value} onChange={(e) => onChange(e.target.value)}
       onKeyDown={onKeyDown} onPaste={onPaste} {...props} rows={1}
-      style={{ ...styles.excelTextarea, paddingLeft: isSubline ? '25px' : '8px', paddingTop: '4px', paddingBottom: '4px' }}
+      style={{ ...styles.excelTextarea, paddingLeft: `${8 + (indent * 16)}px`, paddingTop: '4px', paddingBottom: '4px' }}
     />
   );
 };
@@ -457,7 +526,7 @@ const EditorScreen = ({ initialData, onBack }: { initialData: ProjectFile, onBac
   }, [focusRequest, lines]);
 
   const takeSnapshot = () => {
-    const data = JSON.stringify({ sections, lines });
+    const data = JSON.stringify({ sections, lines: computedLines });
     const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second:'2-digit' });
     setSnapshots(prev => [{ timestamp, data }, ...prev].slice(0, 4));
   };
@@ -474,38 +543,79 @@ const EditorScreen = ({ initialData, onBack }: { initialData: ProjectFile, onBac
   }
 
   const handleCellFocus = (line: BudgetLine) => { setActiveRowId(line.id); triggerSearch(line.description || line.category || ''); };
+  const recalcHierarchy = (allLines: BudgetLine[]): BudgetLine[] => {
+    const byId = new Map(allLines.map(l => [l.id, { ...l }]));
+    const childrenMap = new Map<string, string[]>();
+    allLines.forEach(l => {
+      if (!l.parentId) return;
+      const list = childrenMap.get(l.parentId) || [];
+      list.push(l.id);
+      childrenMap.set(l.parentId, list);
+    });
+    const computeTotal = (id: string): number => {
+      const line = byId.get(id);
+      if (!line) return 0;
+      const children = childrenMap.get(id) || [];
+      const baseTotal = (line.quantity || 0) * (line.frequency || 0) * (line.unit_cost || 0);
+      if (children.length === 0) {
+        byId.set(id, { ...line, total: baseTotal });
+        return baseTotal;
+      }
+      const sumChildren = children.reduce((acc, childId) => acc + computeTotal(childId), 0);
+      const unitCost = sumChildren;
+      const total = (line.quantity || 0) * (line.frequency || 0) * unitCost;
+      byId.set(id, { ...line, unit_cost: unitCost, total });
+      return total;
+    };
+    allLines.forEach(l => computeTotal(l.id));
+    return allLines.map(l => byId.get(l.id) as BudgetLine);
+  };
+  const computedLines = useMemo(() => recalcHierarchy(lines), [lines]);
+  const getChildren = (parentId: string) => computedLines.filter(l => l.parentId === parentId);
+  const matchesFilter = (line: BudgetLine, term: string) => (
+    line.description.toLowerCase().includes(term) || line.category.toLowerCase().includes(term)
+  );
+  const hasDescendantMatch = (lineId: string, term: string): boolean => {
+    const children = getChildren(lineId);
+    for (const child of children) {
+      if (matchesFilter(child, term)) return true;
+      if (hasDescendantMatch(child.id, term)) return true;
+    }
+    return false;
+  };
+  const hasAncestorMatch = (line: BudgetLine, term: string): boolean => {
+    let current = line;
+    while (current.parentId) {
+      const parent = computedLines.find(p => p.id === current.parentId);
+      if (!parent) break;
+      if (matchesFilter(parent, term)) return true;
+      current = parent;
+    }
+    return false;
+  };
   const isLineVisible = (l: BudgetLine) => {
     if (!filterText) return true;
     const lower = filterText.toLowerCase();
-    const selfMatch = l.description.toLowerCase().includes(lower) || l.category.toLowerCase().includes(lower);
-    if (selfMatch) return true;
-    if (!l.parentId) return lines.some(child => child.parentId === l.id && (child.description.toLowerCase().includes(lower) || child.category.toLowerCase().includes(lower)));
-    if (l.parentId) { const parent = lines.find(p => p.id === l.parentId); return parent ? (parent.description.toLowerCase().includes(lower) || parent.category.toLowerCase().includes(lower)) : false; }
+    if (matchesFilter(l, lower)) return true;
+    if (hasDescendantMatch(l.id, lower)) return true;
+    if (hasAncestorMatch(l, lower)) return true;
     return false;
   };
 
-  const recalculateLine = (allLines: BudgetLine[], lineId: string): BudgetLine[] => {
-    const children = allLines.filter(l => l.parentId === lineId);
-    if (children.length > 0) {
-      const sumChildren = children.reduce((acc, curr) => acc + curr.total, 0);
-      return allLines.map(l => l.id === lineId ? { ...l, unit_cost: sumChildren, total: l.quantity * l.frequency * sumChildren } : l);
-    }
-    return allLines;
-  };
-
   const updateLine = (id: string, field: keyof BudgetLine, value: any) => {
-    let nextLines = lines.map(l => {
-      if (l.id === id) {
-        const u = { ...l, [field]: value };
-        if (['quantity', 'frequency', 'unit_cost'].includes(field)) u.total = u.quantity * u.frequency * u.unit_cost;
-        if (field === 'description' || (field === 'category' && !u.description)) triggerSearch(String(value));
-        return u;
-      }
-      return l;
+    setLines(prev => {
+      let nextLines = prev.map(l => {
+        if (l.id === id) {
+          const u = { ...l, [field]: value };
+          if (['quantity', 'frequency', 'unit_cost'].includes(field)) u.total = u.quantity * u.frequency * u.unit_cost;
+          if (field === 'description' || (field === 'category' && !u.description)) triggerSearch(String(value));
+          return u;
+        }
+        return l;
+      });
+      nextLines = recalcHierarchy(nextLines);
+      return nextLines;
     });
-    const editedLine = nextLines.find(l => l.id === id);
-    if (editedLine?.parentId) { nextLines = recalculateLine(nextLines, editedLine.parentId); }
-    setLines(nextLines);
   }
 
   const toggleNotes = (id: string) => setLines(prev => prev.map(l => l.id === id ? { ...l, showNotes: !l.showNotes } : l));
@@ -518,12 +628,26 @@ const EditorScreen = ({ initialData, onBack }: { initialData: ProjectFile, onBac
     setFocusRequest({ id, field: 'description' });
   }
 
+  const getDescendantIds = (lineId: string, allLines: BudgetLine[]): string[] => {
+    const ids: string[] = [];
+    const stack = [lineId];
+    while (stack.length > 0) {
+      const current = stack.pop() as string;
+      const children = allLines.filter(l => l.parentId === current);
+      children.forEach(child => {
+        ids.push(child.id);
+        stack.push(child.id);
+      });
+    }
+    return ids;
+  };
+
   const deleteLine = (lineId: string) => {
     setLines(prev => {
         const line = prev.find(l => l.id === lineId);
         if(!line) return prev;
-        if(!line.parentId) return prev.filter(l => l.id !== lineId && l.parentId !== lineId);
-        return prev.filter(l => l.id !== lineId);
+        const descendants = getDescendantIds(lineId, prev);
+        return prev.filter(l => l.id !== lineId && !descendants.includes(l.id));
     });
     setActiveRowId(null);
   };
@@ -532,21 +656,38 @@ const EditorScreen = ({ initialData, onBack }: { initialData: ProjectFile, onBac
     setLines(prev => {
         const original = prev.find(l => l.id === lineId);
         if(!original) return prev;
-        const newId = generateId();
-        const clone = { ...original, id: newId };
-        let newLines = [...prev];
-        const idx = newLines.findIndex(l => l.id === lineId);
-        newLines.splice(idx + 1, 0, clone);
-        if(!original.parentId) {
-            const children = prev.filter(l => l.parentId === lineId);
-            children.forEach((child, i) => newLines.splice(idx + 2 + i, 0, { ...child, id: generateId(), parentId: newId }));
-        }
+        const subtree: BudgetLine[] = [];
+        const build = (id: string) => {
+          const line = prev.find(l => l.id === id);
+          if (!line) return;
+          subtree.push(line);
+          prev.filter(l => l.parentId === id).forEach(child => build(child.id));
+        };
+        build(lineId);
+
+        const idMap = new Map<string, string>();
+        subtree.forEach(l => idMap.set(l.id, generateId()));
+        const clones = subtree.map(l => ({
+          ...l,
+          id: idMap.get(l.id) as string,
+          parentId: l.parentId ? (idMap.get(l.parentId) || l.parentId) : l.parentId
+        }));
+
+        const indices = subtree.map(l => prev.findIndex(p => p.id === l.id)).filter(i => i >= 0);
+        const insertAt = (indices.length ? Math.max(...indices) : prev.findIndex(p => p.id === lineId)) + 1;
+        const newLines = [...prev];
+        newLines.splice(insertAt, 0, ...clones);
         return newLines;
     });
   };
 
   const toggleSection = (sectionId: string) => setSections(prev => prev.map(s => s.id === sectionId ? { ...s, collapsed: !s.collapsed } : s));
   const handleKeyDown = (e: React.KeyboardEvent, line: BudgetLine, field: string) => {
+    if (e.key === 'Enter' && !e.shiftKey && !e.altKey && !e.metaKey && !e.ctrlKey) {
+      e.preventDefault();
+      moveFocusVertical(line, field, 1);
+      return;
+    }
     if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); addNewLine(line.sectionId, line.parentId); return; }
     if ((e.key === 'Delete' || e.key === 'Backspace') && (e.ctrlKey || e.metaKey)) { e.preventDefault(); deleteLine(line.id); return; }
     if ((e.ctrlKey || e.metaKey) && e.key === 'd') { e.preventDefault(); duplicateLine(line.id); return; }
@@ -558,8 +699,20 @@ const EditorScreen = ({ initialData, onBack }: { initialData: ProjectFile, onBac
     if (e.key === 'ArrowLeft') { if (isText && target.selectionStart && target.selectionStart > 0) return; e.preventDefault(); moveFocusHorizontal(line, field, -1); }
   };
   
+  const getOrderedLinesForSection = (sectionId: string) => {
+    const ordered: BudgetLine[] = [];
+    const roots = computedLines.filter(l => l.sectionId === sectionId && !l.parentId);
+    const add = (line: BudgetLine) => {
+      if (!isLineVisible(line)) return;
+      ordered.push(line);
+      getChildren(line.id).forEach(child => add(child));
+    };
+    roots.forEach(root => add(root));
+    return ordered;
+  };
+
   const moveFocusVertical = (currentLine: BudgetLine, field: string, direction: number) => {
-    const flatVisualList = sections.flatMap(s => s.collapsed ? [] : lines.filter(l => l.sectionId === s.id && isLineVisible(l)));
+    const flatVisualList = sections.flatMap(s => s.collapsed ? [] : getOrderedLinesForSection(s.id));
     const idx = flatVisualList.findIndex(l => l.id === currentLine.id);
     const target = flatVisualList[idx + direction];
     if (target) document.getElementById(`cell-${target.id}-${field}`)?.focus();
@@ -569,7 +722,7 @@ const EditorScreen = ({ initialData, onBack }: { initialData: ProjectFile, onBac
     if (colIdx === -1) return;
     const newColIdx = colIdx + direction;
     if (newColIdx >= 0 && newColIdx < columns.length) { document.getElementById(`cell-${currentLine.id}-${columns[newColIdx]}`)?.focus(); } else {
-        const flatVisualList = sections.flatMap(s => s.collapsed ? [] : lines.filter(l => l.sectionId === s.id && isLineVisible(l)));
+        const flatVisualList = sections.flatMap(s => s.collapsed ? [] : getOrderedLinesForSection(s.id));
         const rowIdx = flatVisualList.findIndex(l => l.id === currentLine.id) + (direction > 0 ? 1 : -1);
         const target = flatVisualList[rowIdx];
         const targetField = direction > 0 ? columns[0] : columns[columns.length - 1];
@@ -585,8 +738,12 @@ const EditorScreen = ({ initialData, onBack }: { initialData: ProjectFile, onBac
     setLines(prevLines => {
       const draggedLine = prevLines.find(l => l.id === draggedLineId);
       if (!draggedLine) return prevLines;
-      const childrenIds = prevLines.filter(l => l.parentId === draggedLine.id).map(l => l.id);
-      return prevLines.map(l => { if (l.id === draggedLineId) return { ...l, sectionId, parentId: undefined }; if (childrenIds.includes(l.id)) return { ...l, sectionId }; return l; });
+      const descendantIds = getDescendantIds(draggedLine.id, prevLines);
+      return prevLines.map(l => {
+        if (l.id === draggedLineId) return { ...l, sectionId, parentId: undefined };
+        if (descendantIds.includes(l.id)) return { ...l, sectionId };
+        return l;
+      });
     });
     setDraggedLineId(null);
   };
@@ -605,7 +762,10 @@ const EditorScreen = ({ initialData, onBack }: { initialData: ProjectFile, onBac
         if (targetIndex < newLines.length) {
           const currentLine = newLines[targetIndex];
           let val: any = rowText.split('\t')[0]; 
-          if (['quantity', 'frequency', 'unit_cost'].includes(field)) { val = parseFloat(val.replace(/,/g, '').replace(/ /g, '')) || 0; }
+          if (['quantity', 'frequency', 'unit_cost'].includes(field)) {
+            const parsed = parseNumericInput(String(val));
+            val = Number.isFinite(parsed) ? parsed : 0;
+          }
           const u = { ...currentLine, [field]: val };
           if (['quantity', 'frequency', 'unit_cost'].includes(field)) { u.total = u.quantity * u.frequency * u.unit_cost; }
           newLines[targetIndex] = u;
@@ -658,8 +818,67 @@ const EditorScreen = ({ initialData, onBack }: { initialData: ProjectFile, onBac
     }
   };
 
-  const grandTotal = lines.reduce((acc, curr) => acc + (curr.parentId ? 0 : curr.total), 0);
-  const sectionTotals = sections.map(s => ({ name: s.name, total: lines.filter(l => l.sectionId === s.id && !l.parentId).reduce((sum, l) => sum + l.total, 0) }));
+  const grandTotal = computedLines.reduce((acc, curr) => acc + (curr.parentId ? 0 : curr.total), 0);
+  const sectionTotals = sections.map(s => ({ name: s.name, total: computedLines.filter(l => l.sectionId === s.id && !l.parentId).reduce((sum, l) => sum + l.total, 0) }));
+  const hasChildren = (lineId: string) => computedLines.some(l => l.parentId === lineId);
+
+  const renderLineTree = (line: BudgetLine, depth: number, sectionId: string) => {
+    if (!isLineVisible(line)) return null;
+    const children = getChildren(line.id);
+    const isSub = depth > 1;
+    const canAddSub = depth < 3;
+    const rowHasChildren = hasChildren(line.id);
+    const indentLevel = depth - 1;
+    const connectorLeft = 8 + (indentLevel * 16) - 10;
+
+    return (
+      <React.Fragment key={line.id}>
+        <tr className={`editor-row ${isSub ? 'editor-subrow' : ''} ${activeRowId === line.id ? 'is-active' : ''}`} style={{cursor: 'pointer'}} onClick={() => setActiveRowId(line.id)} draggable onDragStart={(e) => handleDragStart(e, line.id)} onDragOver={handleDragOver} onDrop={(e) => handleDropOnSection(e, sectionId)}>
+          <td style={{textAlign:'center', cursor: 'grab'}}>
+            {depth === 1 ? (
+              <div style={{display:'flex', alignItems:'center', justifyContent:'center'}}>
+                <span style={{color:'var(--text-muted)', marginRight:4, fontSize:10}}>⠿</span>
+                <input type="checkbox" checked={line.selected} onChange={() => setLines(lines.map(x => x.id === line.id ? {...x, selected: !x.selected} : x))} />
+              </div>
+            ) : (
+              <span style={{color:'var(--text-muted)', fontSize:10}}>⠿</span>
+            )}
+          </td>
+          <td>
+            <AutoExpandingTextarea id={`cell-${line.id}-category`} onPaste={(e: any) => handlePaste(e, line.id, 'category')} onFocus={() => handleCellFocus(line)} onKeyDown={(e:any) => handleKeyDown(e, line, 'category')} value={line.category} onChange={(v:any) => updateLine(line.id, 'category', v)} />
+          </td>
+          <td>
+              <div style={{display: 'flex', flexDirection: 'column', position: 'relative'}}>
+                  {indentLevel > 0 && (
+                    <>
+                      <span style={{position: 'absolute', left: connectorLeft, top: 0, bottom: 0, width: 1, background: 'rgba(139, 92, 246, 0.6)', pointerEvents: 'none'}} />
+                      <span style={{position: 'absolute', left: connectorLeft, top: '50%', width: 10, height: 1, background: 'rgba(139, 92, 246, 0.6)', pointerEvents: 'none'}} />
+                      {indentLevel >= 2 && (
+                        <span style={{position: 'absolute', left: connectorLeft, top: 'calc(50% + 6px)', width: 10, height: 1, background: 'rgba(139, 92, 246, 0.6)', pointerEvents: 'none'}} />
+                      )}
+                    </>
+                  )}
+                  <AutoExpandingTextarea id={`cell-${line.id}-description`} onPaste={(e: any) => handlePaste(e, line.id, 'description')} onFocus={() => handleCellFocus(line)} onKeyDown={(e:any) => handleKeyDown(e, line, 'description')} value={line.description} onChange={(v:any) => updateLine(line.id, 'description', v)} indentLevel={indentLevel} />
+                  {line.showNotes && (<input placeholder="📝 Justificación técnica..." value={line.notes || ''} onChange={(e) => updateLine(line.id, 'notes', e.target.value)} style={{...styles.narrativeInput, paddingLeft: `${8 + (indentLevel * 16)}px`}} autoFocus />)}
+              </div>
+          </td>
+          <td><NumericCellInput id={`cell-${line.id}-quantity`} onPaste={(e: any) => handlePaste(e, line.id, 'quantity')} onFocus={() => handleCellFocus(line)} onKeyDown={(e: any) => handleKeyDown(e, line, 'quantity')} style={{...styles.gridInput, fontFamily: 'Aptos, sans-serif'}} value={line.quantity} onCommit={(v: number) => updateLine(line.id, 'quantity', v)} /></td>
+          <td><AutoExpandingTextarea id={`cell-${line.id}-unit`} onPaste={(e: any) => handlePaste(e, line.id, 'unit')} onFocus={() => handleCellFocus(line)} onKeyDown={(e:any) => handleKeyDown(e, line, 'unit')} value={line.unit} onChange={(v:any) => updateLine(line.id, 'unit', v)} /></td>
+          <td><NumericCellInput id={`cell-${line.id}-frequency`} onPaste={(e: any) => handlePaste(e, line.id, 'frequency')} onFocus={() => handleCellFocus(line)} onKeyDown={(e: any) => handleKeyDown(e, line, 'frequency')} style={{...styles.gridInput, fontFamily: 'Aptos, sans-serif'}} value={line.frequency} onCommit={(v: number) => updateLine(line.id, 'frequency', v)} /></td>
+          <td style={{background: rowHasChildren ? 'rgba(0,0,0,0.08)' : 'transparent'}}>
+            <NumericCellInput id={`cell-${line.id}-unit_cost`} onPaste={(e: any) => handlePaste(e, line.id, 'unit_cost')} onFocus={() => handleCellFocus(line)} onKeyDown={(e: any) => handleKeyDown(e, line, 'unit_cost')} style={{...styles.gridInput, fontFamily: 'Aptos, sans-serif', fontWeight: rowHasChildren ? 'bold' : 'normal'}} value={line.unit_cost} onCommit={(v: number) => updateLine(line.id, 'unit_cost', v)} disabled={rowHasChildren} />
+          </td>
+          <td style={{textAlign:'right', fontWeight: depth === 1 ? 'bold' : 'normal', paddingRight:10, fontSize: depth > 1 ? 11 : undefined}}>{fmt(line.total)}</td>
+          <td></td>
+          <td style={{textAlign:'center'}}>
+            <button className="editor-icon-btn" onClick={(e) => { e.stopPropagation(); toggleNotes(line.id); }} style={{...styles.iconBtn, color: line.notes ? 'var(--primary)' : 'var(--text-muted)'}}>📝</button>
+            {canAddSub && <button className="editor-sub-btn" onClick={(e) => { e.stopPropagation(); addNewLine(sectionId, line.id); }} style={styles.addSubBtn}>+ Sub</button>}
+          </td>
+        </tr>
+        {children.map(child => renderLineTree(child, depth + 1, sectionId))}
+      </React.Fragment>
+    );
+  };
   const updateSection = (id: string, patch: Partial<BudgetSection>) => setSections(prev => prev.map(s => s.id === id ? { ...s, ...patch } : s));
 
   return (
@@ -683,12 +902,12 @@ const EditorScreen = ({ initialData, onBack }: { initialData: ProjectFile, onBac
         {/* 👇 BOTÓN NUEVO DE IA */}
         <button className="ribbon-btn editor-btn-primary" style={{fontFamily: 'Aptos, sans-serif'}} onClick={handleSmartImport}>✨ Importar IA</button>
         
-        <button className="ribbon-btn" style={{fontFamily: 'Aptos, sans-serif'}} onClick={async () => { await window.budgetAPI.saveProjectInternal({ name: `${project.donor}`, ...project, data_json: JSON.stringify({ sections, lines }) }); alert("💾 Guardado"); }}>💾 Guardar</button>
+        <button className="ribbon-btn" style={{fontFamily: 'Aptos, sans-serif'}} onClick={async () => { await window.budgetAPI.saveProjectInternal({ name: `${project.donor}`, ...project, data_json: JSON.stringify({ sections, lines: computedLines }) }); alert("💾 Guardado"); }}>💾 Guardar</button>
         <button className="ribbon-btn editor-btn-warm" style={{fontFamily: 'Aptos, sans-serif'}} onClick={takeSnapshot}>📸 Foto</button>
         <div style={{display:'flex', alignItems:'center', marginLeft: 10}}>
              {snapshots.map((s, i) => <span key={i} onClick={() => restoreSnapshot(s)} style={styles.snapshotBadge}>v{snapshots.length - i}</span>)}
         </div>
-        <button className="ribbon-btn" style={{fontFamily: 'Aptos, sans-serif', marginLeft: 'auto', marginRight: 10}} onClick={() => generateBudgetExcel(project, sections, lines)}>📤 Exportar</button>
+        <button className="ribbon-btn" style={{fontFamily: 'Aptos, sans-serif'}} onClick={() => generateBudgetExcel(project, sections, computedLines)}>📤 Exportar</button>
         <div className="editor-search" style={styles.searchContainer}><span style={{fontSize: 12, marginRight: 5}}>🔍</span><input style={styles.searchInput} placeholder="Filtrar..." value={filterText} onChange={(e) => setFilterText(e.target.value)} /></div>
       </div>
 
@@ -699,7 +918,7 @@ const EditorScreen = ({ initialData, onBack }: { initialData: ProjectFile, onBac
               <tr style={{fontSize: '12px', textAlign: 'left'}}>
                 <th style={{width: '35px', padding: '10px'}}>✔</th>
                 <th style={{width: '90px'}}>Cat.</th>
-                <th style={{width: 'auto', minWidth: '400px'}}>Descripción</th>
+                <th style={{width: '420px'}}>Descripción</th>
                 <th style={{width: '60px'}}>Cant</th>
                 <th style={{width: '60px'}}>Unid</th>
                 <th style={{width: '45px'}}>Freq</th>
@@ -711,7 +930,7 @@ const EditorScreen = ({ initialData, onBack }: { initialData: ProjectFile, onBac
             </thead>
             <tbody>
               {sections.map(s => {
-                const sectionTotal = lines.filter(l => l.sectionId === s.id && !l.parentId).reduce((sum, l) => sum + l.total, 0);
+                const sectionTotal = computedLines.filter(l => l.sectionId === s.id && !l.parentId).reduce((sum, l) => sum + l.total, 0);
                 const capLimit = s.capType ? (s.capType === 'amount' ? (s.capValue || 0) : (grandTotal * ((s.capValue || 0) / 100))) : null;
                 const isOverCap = capLimit !== null && sectionTotal > capLimit;
                 return (
@@ -757,49 +976,7 @@ const EditorScreen = ({ initialData, onBack }: { initialData: ProjectFile, onBac
                         )}
                       </td>
                     </tr>
-                    {!s.collapsed && lines.filter(l => l.sectionId === s.id && !l.parentId && isLineVisible(l)).map(mainLine => {
-                      const hasChildren = lines.some(sub => sub.parentId === mainLine.id);
-                      return (
-                        <React.Fragment key={mainLine.id}>
-                          <tr className={`editor-row ${activeRowId === mainLine.id ? 'is-active' : ''}`} style={{cursor: 'pointer'}} onClick={() => setActiveRowId(mainLine.id)} draggable onDragStart={(e) => handleDragStart(e, mainLine.id)} onDragOver={handleDragOver} onDrop={(e) => handleDropOnSection(e, s.id)}>
-                            <td style={{textAlign:'center', cursor: 'grab'}}><div style={{display:'flex', alignItems:'center', justifyContent:'center'}}><span style={{color:'var(--text-muted)', marginRight:4, fontSize:10}}>⠿</span><input type="checkbox" checked={mainLine.selected} onChange={() => setLines(lines.map(x => x.id === mainLine.id ? {...x, selected: !x.selected} : x))} /></div></td>
-                            <td><AutoExpandingTextarea id={`cell-${mainLine.id}-category`} onPaste={(e: any) => handlePaste(e, mainLine.id, 'category')} onFocus={() => handleCellFocus(mainLine)} onKeyDown={(e:any) => handleKeyDown(e, mainLine, 'category')} value={mainLine.category} onChange={(v:any) => updateLine(mainLine.id, 'category', v)} /></td>
-                            <td>
-                                <div style={{display: 'flex', flexDirection: 'column'}}>
-                                    <AutoExpandingTextarea id={`cell-${mainLine.id}-description`} onPaste={(e: any) => handlePaste(e, mainLine.id, 'description')} onFocus={() => handleCellFocus(mainLine)} onKeyDown={(e:any) => handleKeyDown(e, mainLine, 'description')} value={mainLine.description} onChange={(v:any) => updateLine(mainLine.id, 'description', v)} />
-                                    {mainLine.showNotes && (<input placeholder="📝 Justificación técnica..." value={mainLine.notes || ''} onChange={(e) => updateLine(mainLine.id, 'notes', e.target.value)} style={styles.narrativeInput} autoFocus />)}
-                                </div>
-                            </td>
-                            <td><input id={`cell-${mainLine.id}-quantity`} onPaste={(e: any) => handlePaste(e, mainLine.id, 'quantity')} onFocus={() => handleCellFocus(mainLine)} onKeyDown={(e) => handleKeyDown(e, mainLine, 'quantity')} style={{...styles.gridInput, fontFamily: 'Aptos, sans-serif'}} type="number" value={mainLine.quantity} onChange={e => updateLine(mainLine.id, 'quantity', parseFloat(e.target.value))} /></td>
-                            <td><AutoExpandingTextarea id={`cell-${mainLine.id}-unit`} onPaste={(e: any) => handlePaste(e, mainLine.id, 'unit')} onFocus={() => handleCellFocus(mainLine)} onKeyDown={(e:any) => handleKeyDown(e, mainLine, 'unit')} value={mainLine.unit} onChange={(v:any) => updateLine(mainLine.id, 'unit', v)} /></td>
-                            <td><input id={`cell-${mainLine.id}-frequency`} onPaste={(e: any) => handlePaste(e, mainLine.id, 'frequency')} onFocus={() => handleCellFocus(mainLine)} onKeyDown={(e) => handleKeyDown(e, mainLine, 'frequency')} style={{...styles.gridInput, fontFamily: 'Aptos, sans-serif'}} type="number" value={mainLine.frequency} onChange={e => updateLine(mainLine.id, 'frequency', parseFloat(e.target.value))} /></td>
-                            <td style={{background: hasChildren ? 'rgba(0,0,0,0.08)' : 'transparent'}}><input id={`cell-${mainLine.id}-unit_cost`} onPaste={(e: any) => handlePaste(e, mainLine.id, 'unit_cost')} onFocus={() => handleCellFocus(mainLine)} onKeyDown={(e) => handleKeyDown(e, mainLine, 'unit_cost')} style={{...styles.gridInput, fontFamily: 'Aptos, sans-serif', fontWeight: hasChildren ? 'bold' : 'normal'}} type="number" value={mainLine.unit_cost} disabled={hasChildren} onChange={e => updateLine(mainLine.id, 'unit_cost', parseFloat(e.target.value))} /></td>
-                            <td style={{textAlign:'right', fontWeight:'bold', paddingRight:10}}>{fmt(mainLine.total)}</td>
-                            <td></td>
-                            <td style={{textAlign:'center'}}><button className="editor-icon-btn" onClick={(e) => { e.stopPropagation(); toggleNotes(mainLine.id); }} style={{...styles.iconBtn, color: mainLine.notes ? 'var(--primary)' : 'var(--text-muted)'}}>📝</button><button className="editor-sub-btn" onClick={(e) => { e.stopPropagation(); addNewLine(s.id, mainLine.id); }} style={styles.addSubBtn}>+ Sub</button></td>
-                          </tr>
-                          {lines.filter(sub => sub.parentId === mainLine.id && isLineVisible(sub)).map(subLine => (
-                            <tr key={subLine.id} className={`editor-row editor-subrow ${activeRowId === subLine.id ? 'is-active' : ''}`} style={{cursor: 'pointer'}} onClick={() => setActiveRowId(subLine.id)} draggable onDragStart={(e) => handleDragStart(e, subLine.id)} onDragOver={handleDragOver} onDrop={(e) => handleDropOnSection(e, s.id)}>
-                              <td style={{textAlign:'center', cursor: 'grab'}}><span style={{color:'var(--text-muted)', fontSize:10}}>⠿</span></td>
-                              <td style={{borderLeft: '3px solid rgba(139, 92, 246, 0.6)'}}><AutoExpandingTextarea id={`cell-${subLine.id}-category`} onPaste={(e: any) => handlePaste(e, subLine.id, 'category')} onFocus={() => handleCellFocus(subLine)} onKeyDown={(e:any) => handleKeyDown(e, subLine, 'category')} value={subLine.category} onChange={(v:any) => updateLine(subLine.id, 'category', v)} /></td>
-                              <td>
-                                  <div style={{display: 'flex', flexDirection: 'column'}}>
-                                      <AutoExpandingTextarea id={`cell-${subLine.id}-description`} onPaste={(e: any) => handlePaste(e, subLine.id, 'description')} onFocus={() => handleCellFocus(subLine)} onKeyDown={(e:any) => handleKeyDown(e, subLine, 'description')} value={subLine.description} onChange={(v:any) => updateLine(subLine.id, 'description', v)} isSubline />
-                                      {subLine.showNotes && (<input placeholder="📝 Justificación técnica..." value={subLine.notes || ''} onChange={(e) => updateLine(subLine.id, 'notes', e.target.value)} style={{...styles.narrativeInput, paddingLeft: '25px'}} autoFocus />)}
-                                  </div>
-                              </td>
-                              <td><input id={`cell-${subLine.id}-quantity`} onPaste={(e: any) => handlePaste(e, subLine.id, 'quantity')} onFocus={() => handleCellFocus(subLine)} onKeyDown={(e) => handleKeyDown(e, subLine, 'quantity')} style={{...styles.gridInput, fontFamily: 'Aptos, sans-serif'}} type="number" value={subLine.quantity} onChange={e => updateLine(subLine.id, 'quantity', parseFloat(e.target.value))} /></td>
-                              <td><AutoExpandingTextarea id={`cell-${subLine.id}-unit`} onPaste={(e: any) => handlePaste(e, subLine.id, 'unit')} onFocus={() => handleCellFocus(subLine)} onKeyDown={(e:any) => handleKeyDown(e, subLine, 'unit')} value={subLine.unit} onChange={(v:any) => updateLine(subLine.id, 'unit', v)} /></td>
-                              <td><input id={`cell-${subLine.id}-frequency`} onPaste={(e: any) => handlePaste(e, subLine.id, 'frequency')} onFocus={() => handleCellFocus(subLine)} onKeyDown={(e) => handleKeyDown(e, subLine, 'frequency')} style={{...styles.gridInput, fontFamily: 'Aptos, sans-serif'}} type="number" value={subLine.frequency} onChange={e => updateLine(subLine.id, 'frequency', parseFloat(e.target.value))} /></td>
-                              <td><input id={`cell-${subLine.id}-unit_cost`} onPaste={(e: any) => handlePaste(e, subLine.id, 'unit_cost')} onFocus={() => handleCellFocus(subLine)} onKeyDown={(e) => handleKeyDown(e, subLine, 'unit_cost')} style={{...styles.gridInput, fontFamily: 'Aptos, sans-serif'}} type="number" value={subLine.unit_cost} onChange={e => updateLine(subLine.id, 'unit_cost', parseFloat(e.target.value))} /></td>
-                              <td style={{textAlign:'right', fontSize:11, paddingRight:10}}>{fmt(subLine.total)}</td>
-                              <td></td>
-                              <td style={{textAlign: 'center'}}><button className="editor-icon-btn" onClick={(e) => { e.stopPropagation(); toggleNotes(subLine.id); }} style={{...styles.iconBtn, color: subLine.notes ? 'var(--primary)' : 'var(--text-muted)'}}>📝</button></td>
-                            </tr>
-                          ))}
-                        </React.Fragment>
-                      );
-                    })}
+                    {!s.collapsed && computedLines.filter(l => l.sectionId === s.id && !l.parentId && isLineVisible(l)).map(mainLine => renderLineTree(mainLine, 1, s.id))}
                     {!filterText && !s.collapsed && <tr onClick={() => addNewLine(s.id)} style={{cursor: 'pointer'}}><td colSpan={10} style={{padding: '8px', fontSize: '11px', color: 'var(--text-muted)'}}>+ Añadir línea a {s.name}</td></tr>}
                   </React.Fragment>
                 );
@@ -856,9 +1033,20 @@ export default function App() {
   const [screen, setScreen] = useState('home');
   const [projects, setProjects] = useState<any[]>([]);
   const [selectedData, setSelectedData] = useState<ProjectFile | null>(null);
+  const [importProgress, setImportProgress] = useState<{ percent: number; message?: string } | null>(null);
 
   const load = async () => { try { const p = await window.budgetAPI.getAllProjects(); setProjects(Array.isArray(p) ? p : []); } catch(e) { console.error(e); } }
   useEffect(() => { load(); }, []);
+  useEffect(() => {
+    const unsubscribe = window.budgetAPI.onImportProgress?.((payload) => {
+      if (!payload) return;
+      setImportProgress(payload);
+      if (payload.percent >= 100) {
+        setTimeout(() => setImportProgress(null), 800);
+      }
+    });
+    return () => { if (unsubscribe) unsubscribe(); };
+  }, []);
 
   const onSelect = (p: any) => {
     try {
@@ -884,26 +1072,70 @@ export default function App() {
           return;
         }
 
-        // Convertimos las filas de la BD a líneas del Editor
-        const newSectionId = generateId();
-        const convertedLines: BudgetLine[] = items.map((item: any) => ({
-          id: generateId(),
-          sectionId: newSectionId,
-          category: item.category || 'General',
-          description: item.description,
-          unit: item.unit || 'Und',
-          quantity: 1, 
-          frequency: 1,
-          unit_cost: item.unit_cost,
-          total: item.unit_cost,
-          selected: false,
-          showNotes: false
-        }));
+        const sectionMap = new Map<string, BudgetSection>();
+        const sectionOrder: string[] = [];
+        const lines: BudgetLine[] = [];
+        const lineIdByCode = new Map<string, string>();
+        const lastMainBySection = new Map<string, string>();
 
+        items.forEach((item: any) => {
+          const sectionName = item.section || item.category || source.name || 'Importado';
+          if (!sectionMap.has(sectionName)) {
+            sectionMap.set(sectionName, { id: generateId(), name: sectionName, collapsed: false });
+            sectionOrder.push(sectionName);
+          }
+          const sectionId = sectionMap.get(sectionName)!.id;
+          const level = Number(item.level) || 2;
+          const code = item.code || '';
+          const parentCode = item.parent_code || '';
+          let parentId: string | undefined;
+
+          if (level >= 3) {
+            parentId = parentCode && lineIdByCode.has(parentCode)
+              ? lineIdByCode.get(parentCode)
+              : lastMainBySection.get(sectionName);
+          }
+
+          const lineId = generateId();
+          if (!parentId) {
+            lastMainBySection.set(sectionName, lineId);
+          }
+          if (code) lineIdByCode.set(code, lineId);
+
+          const quantity = Number.isFinite(item.quantity) ? Number(item.quantity) : 1;
+          const frequency = Number.isFinite(item.frequency) ? Number(item.frequency) : 1;
+          const unitCost = Number.isFinite(item.unit_cost) ? Number(item.unit_cost) : 0;
+
+          lines.push({
+            id: lineId,
+            sectionId,
+            parentId,
+            category: item.category || sectionName,
+            description: item.description,
+            unit: item.unit || 'Und',
+            quantity,
+            frequency,
+            unit_cost: unitCost,
+            total: quantity * frequency * unitCost,
+            selected: false,
+            showNotes: false
+          });
+        });
+
+        const inferredMeta = source.meta || {};
+        const inferredName = inferredMeta.projectName || inferredMeta.donor || source.name || 'Importado';
         const projectData: ProjectFile = {
-          meta: { donor: 'Importado', country: 'Perú', currency: 'PEN', sector: '', duration: 12, usdRate: 3.75, eurRate: 4.05 },
-          sections: [{ id: newSectionId, name: source.name, collapsed: false }],
-          lines: convertedLines
+          meta: {
+            donor: inferredName,
+            country: inferredMeta.country || 'Perú',
+            currency: inferredMeta.currency || 'PEN',
+            sector: inferredMeta.sector || '',
+            duration: inferredMeta.duration || 12,
+            usdRate: inferredMeta.usdRate || 3.75,
+            eurRate: inferredMeta.eurRate || 4.05
+          },
+          sections: sectionOrder.map(name => sectionMap.get(name)!),
+          lines
         };
 
         setSelectedData(projectData);
@@ -934,6 +1166,20 @@ export default function App() {
           // Pasamos la nueva función aquí 👇
           onOpenEditor={handleLoadSourceToEditor} 
         />
+      )}
+
+      {importProgress && (
+        <div className="memory-overlay">
+          <div className="editor-overlay-card">
+            <div className="editor-overlay-emoji">📊</div>
+            <h3 className="editor-overlay-title" style={{fontFamily: 'Aptos, sans-serif'}}>
+              {importProgress.message || 'Importando...'} {Math.min(100, Math.max(0, Math.round(importProgress.percent)))}%
+            </h3>
+            <div style={{width: 220, height: 6, background: 'rgba(255,255,255,0.15)', borderRadius: 6, marginTop: 8}}>
+              <div style={{width: `${Math.min(100, Math.max(0, importProgress.percent))}%`, height: '100%', background: 'linear-gradient(90deg, #7C3AED, #22D3EE)', borderRadius: 6}} />
+            </div>
+          </div>
+        </div>
       )}
     </div>
   )
