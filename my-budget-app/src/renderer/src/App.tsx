@@ -42,7 +42,6 @@ declare global {
       getMemorySources: () => Promise<MemorySource[]>
       importToEditor: () => Promise<any>
       importSmartBudget: () => Promise<{ success: boolean; data?: any[]; message?: string }>
-      // 👇 ESTA ES LA LÍNEA NUEVA QUE FALTA
       getMemoryItems: (sourceId: string) => Promise<any[]>
       deleteMemorySource: (sourceId: string) => Promise<{ success: boolean; message?: string }>
       renameMemorySource: (id: string, newName: string, type: string) => Promise<{ success: boolean; message?: string }>
@@ -58,6 +57,16 @@ const fmtPct = (part: number, total: number) => {
   return ((part / total) * 100).toFixed(1) + '%';
 };
 
+// --- HELPER DE SEGURIDAD NUMÉRICA (NUEVO) ---
+const safeVal = (val: any): number => {
+  if (typeof val === 'number') return Number.isFinite(val) ? val : 0;
+  if (!val) return 0;
+  // Limpia strings con comas o espacios antes de parsear
+  const str = String(val).replace(/,/g, '').trim(); 
+  const num = parseFloat(str);
+  return Number.isFinite(num) ? num : 0;
+};
+
 const normalizeNumberToken = (token: string): string => {
   let t = token;
   if (t.includes(',') && t.includes('.')) {
@@ -70,18 +79,112 @@ const normalizeNumberToken = (token: string): string => {
   return t;
 };
 
-const parseNumericInput = (raw: string): number => {
-  if (!raw) return NaN;
+const normalizeNumericExpression = (raw: string): string => {
   let expr = raw.trim();
   if (expr.startsWith('=')) expr = expr.slice(1);
-  if (!/^[0-9+\-*/().,%\s]+$/.test(expr)) return NaN;
-  expr = expr.replace(/(\d[\d.,]*)(%?)/g, (_m, num, pct) => {
+  expr = expr.replace(/\s+/g, '');
+  if (!/^[0-9+\-*/().,%]+$/.test(expr)) return '';
+  return expr.replace(/(\d[\d.,]*)(%?)/g, (_m, num, pct) => {
     const normalized = normalizeNumberToken(num);
-    return pct ? `(${normalized}/100)` : normalized;
+    const parsed = parseFloat(normalized);
+    if (!Number.isFinite(parsed)) return '0';
+    const value = pct ? parsed / 100 : parsed;
+    return String(value);
   });
+};
+
+const evaluateExpression = (expr: string): number => {
+  let i = 0;
+
+  const readNumber = (): number => {
+    let start = i;
+    let hasDot = false;
+    if (expr[i] === '.') {
+      hasDot = true;
+      i += 1;
+    }
+    while (i < expr.length) {
+      const ch = expr[i];
+      if (ch >= '0' && ch <= '9') {
+        i += 1;
+        continue;
+      }
+      if (ch === '.') {
+        if (hasDot) break;
+        hasDot = true;
+        i += 1;
+        continue;
+      }
+      break;
+    }
+    const numStr = expr.slice(start, i);
+    if (!numStr || numStr === '.') throw new Error('Invalid number');
+    const num = Number(numStr);
+    if (!Number.isFinite(num)) throw new Error('Invalid number');
+    return num;
+  };
+
+  const parseFactor = (): number => {
+    const ch = expr[i];
+    if (ch === '+') {
+      i += 1;
+      return parseFactor();
+    }
+    if (ch === '-') {
+      i += 1;
+      return -parseFactor();
+    }
+    if (ch === '(') {
+      i += 1;
+      const value = parseExpression();
+      if (expr[i] !== ')') throw new Error('Missing )');
+      i += 1;
+      return value;
+    }
+    return readNumber();
+  };
+
+  const parseTerm = (): number => {
+    let value = parseFactor();
+    while (i < expr.length) {
+      const ch = expr[i];
+      if (ch === '*' || ch === '/') {
+        i += 1;
+        const rhs = parseFactor();
+        value = ch === '*' ? value * rhs : value / rhs;
+        continue;
+      }
+      break;
+    }
+    return value;
+  };
+
+  const parseExpression = (): number => {
+    let value = parseTerm();
+    while (i < expr.length) {
+      const ch = expr[i];
+      if (ch === '+' || ch === '-') {
+        i += 1;
+        const rhs = parseTerm();
+        value = ch === '+' ? value + rhs : value - rhs;
+        continue;
+      }
+      break;
+    }
+    return value;
+  };
+
+  const result = parseExpression();
+  if (i !== expr.length) throw new Error('Unexpected input');
+  return result;
+};
+
+const parseNumericInput = (raw: string): number => {
+  if (!raw) return NaN;
   try {
-    // eslint-disable-next-line no-new-func
-    const result = Function(`"use strict"; return (${expr});`)();
+    const expr = normalizeNumericExpression(raw);
+    if (!expr) return NaN;
+    const result = evaluateExpression(expr);
     return Number.isFinite(result) ? result : NaN;
   } catch {
     return NaN;
@@ -543,33 +646,57 @@ const EditorScreen = ({ initialData, onBack }: { initialData: ProjectFile, onBac
   }
 
   const handleCellFocus = (line: BudgetLine) => { setActiveRowId(line.id); triggerSearch(line.description || line.category || ''); };
+  
+  // --- FUNCIÓN DE CÁLCULO DE JERARQUÍA CORREGIDA ---
   const recalcHierarchy = (allLines: BudgetLine[]): BudgetLine[] => {
+    // 1. Crear mapa de referencias
     const byId = new Map(allLines.map(l => [l.id, { ...l }]));
     const childrenMap = new Map<string, string[]>();
+
+    // 2. Organizar relaciones padre-hijo
     allLines.forEach(l => {
-      if (!l.parentId) return;
-      const list = childrenMap.get(l.parentId) || [];
-      list.push(l.id);
-      childrenMap.set(l.parentId, list);
+        if (!l.parentId) return;
+        if (!byId.has(l.parentId)) return; // Evitar huérfanos
+        const list = childrenMap.get(l.parentId) || [];
+        list.push(l.id);
+        childrenMap.set(l.parentId, list);
     });
+
+    // 3. Función recursiva de cálculo
     const computeTotal = (id: string): number => {
-      const line = byId.get(id);
-      if (!line) return 0;
-      const children = childrenMap.get(id) || [];
-      const baseTotal = (line.quantity || 0) * (line.frequency || 0) * (line.unit_cost || 0);
-      if (children.length === 0) {
-        byId.set(id, { ...line, total: baseTotal });
-        return baseTotal;
-      }
-      const sumChildren = children.reduce((acc, childId) => acc + computeTotal(childId), 0);
-      const unitCost = sumChildren;
-      const total = (line.quantity || 0) * (line.frequency || 0) * unitCost;
-      byId.set(id, { ...line, unit_cost: unitCost, total });
-      return total;
+        const line = byId.get(id);
+        if (!line) return 0;
+
+        const childrenIds = childrenMap.get(id) || [];
+        
+        // Valores base sanitizados
+        const qty = safeVal(line.quantity);
+        const freq = safeVal(line.frequency);
+        
+        // CASO 1: Ítem final
+        if (childrenIds.length === 0) {
+            const uCost = safeVal(line.unit_cost);
+            const baseTotal = qty * freq * uCost;
+            byId.set(id, { ...line, quantity: qty, frequency: freq, unit_cost: uCost, total: baseTotal });
+            return baseTotal;
+        }
+
+        // CASO 2: Padre (Suma de hijos)
+        const sumChildren = childrenIds.reduce((acc, childId) => acc + computeTotal(childId), 0);
+        const parentUnitCost = sumChildren; // Costo unitario es la suma de los hijos
+        const total = qty * freq * parentUnitCost; // Total padre = Su Qty * Su Freq * SumaHijos
+
+        byId.set(id, { ...line, quantity: qty, frequency: freq, unit_cost: parentUnitCost, total });
+        return total;
     };
-    allLines.forEach(l => computeTotal(l.id));
+
+    allLines.forEach(l => {
+        if (!l.parentId) computeTotal(l.id);
+    });
+
     return allLines.map(l => byId.get(l.id) as BudgetLine);
   };
+
   const computedLines = useMemo(() => recalcHierarchy(lines), [lines]);
   const getChildren = (parentId: string) => computedLines.filter(l => l.parentId === parentId);
   const matchesFilter = (line: BudgetLine, term: string) => (
@@ -606,8 +733,17 @@ const EditorScreen = ({ initialData, onBack }: { initialData: ProjectFile, onBac
     setLines(prev => {
       let nextLines = prev.map(l => {
         if (l.id === id) {
-          const u = { ...l, [field]: value };
-          if (['quantity', 'frequency', 'unit_cost'].includes(field)) u.total = u.quantity * u.frequency * u.unit_cost;
+          // Asegurar que si es campo numérico, se guarde como número
+          let safeValue = value;
+          if (['quantity', 'frequency', 'unit_cost'].includes(field)) {
+             safeValue = safeVal(value); 
+          }
+
+          const u = { ...l, [field]: safeValue };
+          // El cálculo de u.total real se hace en recalcHierarchy, pero actualizamos localmente
+          if (['quantity', 'frequency', 'unit_cost'].includes(field)) {
+             u.total = (u.quantity || 0) * (u.frequency || 0) * (u.unit_cost || 0);
+          }
           if (field === 'description' || (field === 'category' && !u.description)) triggerSearch(String(value));
           return u;
         }
@@ -775,44 +911,73 @@ const EditorScreen = ({ initialData, onBack }: { initialData: ProjectFile, onBac
     });
   };
 
-  // --- FUNCIÓN NUEVA PARA MANEJAR LA IMPORTACIÓN CON IA ---
+  // --- FUNCIÓN NUEVA PARA MANEJAR LA IMPORTACIÓN CON IA (CORREGIDA) ---
   const handleSmartImport = async () => {
     setIsAiLoading(true);
     try {
       const result = await window.budgetAPI.importSmartBudget();
       
       if (result.success && result.data && result.data.length > 0) {
-        // 1. Crear una nueva sección para lo importado
-        const newSectionId = generateId();
-        const newSection = { id: newSectionId, name: '✨ Importado con IA', collapsed: false };
         
-        // 2. Mapear los datos de la IA a BudgetLine
-        const newLines: BudgetLine[] = result.data.map((item: any) => ({
-          id: generateId(),
-          sectionId: newSectionId,
-          parentId: undefined,
-          category: item.category || 'Otros', // Categoría que adivinó la IA
-          description: item.description || 'Ítem importado',
-          unit: item.unit || 'Und',
-          quantity: Number(item.quantity) || 1,
-          frequency: 1, // Por defecto
-          unit_cost: Number(item.unit_cost) || 0,
-          total: (Number(item.quantity) || 1) * (Number(item.unit_cost) || 0),
-          selected: false,
-          showNotes: false
-        }));
+        // Mapas para agrupar por categoría
+        const newSectionsMap = new Map<string, string>(); // NombreCategoría -> IDSeccion
+        const sectionsToAdd: BudgetSection[] = [];
+        const linesToAdd: BudgetLine[] = [];
+
+        result.data.forEach((item: any) => {
+          // Detectar o crear sección basada en la categoría de la IA
+          const categoryName = item.category || 'General';
+          
+          if (!newSectionsMap.has(categoryName)) {
+            const newSectionId = generateId();
+            newSectionsMap.set(categoryName, newSectionId);
+            sectionsToAdd.push({ 
+              id: newSectionId, 
+              name: categoryName.toUpperCase(), 
+              collapsed: false 
+            });
+          }
+
+          const sectionId = newSectionsMap.get(categoryName)!;
+          
+          // Limpieza de números (Manejo de strings tipo "1,200.50")
+          const rawCost = item.unit_cost ? String(item.unit_cost).replace(/,/g, '') : '0';
+          const rawQty = item.quantity ? String(item.quantity).replace(/,/g, '') : '1';
+          
+          const unitCost = parseFloat(rawCost) || 0;
+          const qty = parseFloat(rawQty) || 1;
+
+          linesToAdd.push({
+            id: generateId(),
+            sectionId: sectionId,
+            parentId: undefined, // Importados como items principales
+            category: item.category || 'Varios',
+            description: item.description || 'Ítem importado',
+            unit: item.unit || 'Und',
+            quantity: qty,
+            frequency: 1,
+            unit_cost: unitCost,
+            total: qty * 1 * unitCost,
+            selected: false,
+            showNotes: false
+          });
+        });
   
-        // 3. Actualizar el estado
-        setSections(prev => [...prev, newSection]);
-        setLines(prev => [...prev, ...newLines]);
+        // Actualizar estado y recalcular jerarquía inmediatamente
+        setSections(prev => [...prev, ...sectionsToAdd]);
+        setLines(prev => {
+            const merged = [...prev, ...linesToAdd];
+            return recalcHierarchy(merged);
+        });
         
-        alert(`✅ Se importaron ${newLines.length} líneas exitosamente.`);
+        alert(`✅ Se importaron ${linesToAdd.length} líneas en ${sectionsToAdd.length} secciones nuevas.`);
       } else {
         if (result.message) console.log(result.message);
+        alert("⚠️ La IA no devolvió datos válidos.");
       }
     } catch (error) {
       console.error(error);
-      alert("❌ Error al procesar con IA. Asegúrate de que Ollama esté corriendo.");
+      alert("❌ Error al procesar con IA. Revisa la consola.");
     } finally {
       setIsAiLoading(false);
     }
@@ -1232,4 +1397,4 @@ const styles: any = {
   costHighlight: {
     color: 'var(--primary)', fontWeight: 'bold', fontSize: '12px'
   }
-}
+};

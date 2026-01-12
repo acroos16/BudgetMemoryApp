@@ -283,7 +283,6 @@ function parseBudgetItems(rawData: any[][], formulaMap?: Record<string, string>)
     const total = idxTotal >= 0 ? getNumberNear(row, idxTotal) : NaN;
     let unitCost = idxUnitCost >= 0 ? getNumberNear(row, idxUnitCost) : NaN;
     const rowHasNumbers = (Number.isFinite(unitCost) && unitCost > 0) || (Number.isFinite(total) && total > 0);
-    const rowHasDetails = codeIsItem || unit !== '' || Number.isFinite(quantity) || Number.isFinite(frequency);
 
     const hasUnitOrQty = unit !== '' || Number.isFinite(quantity) || Number.isFinite(frequency);
     const isSubtotal = descLower.includes('subtotal') || descLower.includes('total');
@@ -597,7 +596,7 @@ app.whenReady().then(() => {
     }
   });
 
-// ---------------------------------------------------------
+  // ---------------------------------------------------------
   // HANDLER: IMPORTAR INTELIGENTE (IA) 🧠 -> A MEMORIA
   // ---------------------------------------------------------
   ipcMain.handle('import-smart-budget', async (event) => {
@@ -639,14 +638,16 @@ app.whenReady().then(() => {
         let aiInput: any[] = [];
         if (headerInfo) {
           const headers = headerInfo.headers;
-          const rows = rawData.slice(headerInfo.index + 1, headerInfo.index + 1 + 200);
+          // AQUÍ AUMENTÉ EL LÍMITE DE 200 A 1000
+          const rows = rawData.slice(headerInfo.index + 1, headerInfo.index + 1 + 1000);
           aiInput = rows.map(r => {
             const obj: Record<string, any> = {};
             headers.forEach((h, idx) => { if (h) obj[h] = r[idx]; });
             return obj;
           });
         } else {
-          aiInput = rawData.filter((r: any) => r.length > 0).slice(0, 200);
+          // AQUÍ AUMENTÉ EL LÍMITE DE 200 A 1000
+          aiInput = rawData.filter((r: any) => r.length > 0).slice(0, 1000);
         }
 
         // Esperamos que analyzeBudgetRows devuelva un array de objetos:
@@ -726,7 +727,9 @@ app.whenReady().then(() => {
       transaction() // Ejecuta la transacción
 
       sendImportProgress(event, 100, 'Importación completa');
-      return { success: true, message: `IA procesó e importó correctamente.` }
+      
+      // ✅ CORRECCIÓN FINAL: Devolver los datos para que el Editor los vea inmediatamente
+      return { success: true, data: itemsToImport, message: `IA procesó e importó correctamente.` }
 
     } catch (error: any) {
       console.error("Error en Importación IA:", error)
